@@ -7,4 +7,3 @@ Monorepo base simplificado para un portal de presupuestos médicos.
 - `apps/api`: backend en NestJS
 - `packages/shared`: tipos y enums compartidos
 - `prisma`: schema y seed de base de datos
-- `docs`: documentación funcional y técnica
