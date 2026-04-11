@@ -1,0 +1,383 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  DIVISION_ADMIN
+  EXECUTIVE
+  MAINTAINER
+  VIEWER
+}
+
+enum CareType {
+  AMBULATORY
+  SURGICAL
+  BOTH
+}
+
+enum ProfessionalType {
+  STAFF
+  EXTERNAL
+}
+
+enum CoverageType {
+  ISAPRE_PLAN
+  FONASA
+  PARTICULAR
+  OTHER
+}
+
+enum QuoteStatus {
+  DRAFT
+  FINALIZED
+  SENT
+}
+
+enum QuoteItemSourceType {
+  PROCEDURE
+  PACKAGE
+  BASKET
+  MANUAL
+}
+
+model Division {
+  id                    Int                    @id @default(autoincrement())
+  name                  String
+  code                  String                 @unique
+  status                Boolean                @default(true)
+  users                 User[]
+  patients              Patient[]
+  procedures            Procedure[]
+  prices                ProcedurePrice[]
+  professionals         Professional[]
+  medicalFees           MedicalFee[]
+  packages              MedicalPackage[]
+  baskets               Basket[]
+  quotes                Quote[]
+  divisionIsapres       DivisionIsapre[]
+  procedurePackageLinks ProcedurePackageLink[]
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+  deletedAt             DateTime?
+}
+
+model User {
+  id           Int       @id @default(autoincrement())
+  divisionId   Int?
+  division     Division? @relation(fields: [divisionId], references: [id])
+  name         String
+  email        String    @unique
+  passwordHash String
+  role         UserRole
+  status       Boolean   @default(true)
+  quotes       Quote[]   @relation("QuoteCreatedBy")
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  deletedAt    DateTime?
+}
+
+model Patient {
+  id         Int       @id @default(autoincrement())
+  divisionId Int
+  division   Division  @relation(fields: [divisionId], references: [id])
+  rut        String
+  firstName  String
+  lastName   String
+  middleName String?
+  birthDate  DateTime?
+  sex        String?
+  email      String?
+  phone      String?
+  address    String?
+  quotes     Quote[]
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  deletedAt  DateTime?
+
+  @@unique([divisionId, rut])
+}
+
+model Isapre {
+  id              Int              @id @default(autoincrement())
+  name            String
+  code            String           @unique
+  active          Boolean          @default(true)
+  plans           IsaprePlan[]
+  divisionLinks   DivisionIsapre[]
+  procedurePrices ProcedurePrice[]
+  medicalFees     MedicalFee[]
+  quotes          Quote[]
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  deletedAt       DateTime?
+}
+
+model IsaprePlan {
+  id              Int              @id @default(autoincrement())
+  isapreId        Int
+  isapre          Isapre           @relation(fields: [isapreId], references: [id])
+  name            String
+  code            String?
+  active          Boolean          @default(true)
+  procedurePrices ProcedurePrice[]
+  medicalFees     MedicalFee[]
+  quotes          Quote[]
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  deletedAt       DateTime?
+
+  @@unique([isapreId, name])
+}
+
+model DivisionIsapre {
+  id         Int       @id @default(autoincrement())
+  divisionId Int
+  division   Division  @relation(fields: [divisionId], references: [id])
+  isapreId   Int
+  isapre     Isapre    @relation(fields: [isapreId], references: [id])
+  active     Boolean   @default(true)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  deletedAt  DateTime?
+
+  @@unique([divisionId, isapreId])
+}
+
+model Procedure {
+  id           Int                    @id @default(autoincrement())
+  divisionId   Int
+  division     Division               @relation(fields: [divisionId], references: [id])
+  code         String
+  name         String
+  description  String?
+  category     String?
+  careType     CareType               @default(BOTH)
+  active       Boolean                @default(true)
+  prices       ProcedurePrice[]
+  medicalFees  MedicalFee[]
+  packageLinks ProcedurePackageLink[]
+  packageItems MedicalPackageItem[]
+  basketItems  BasketItem[]
+  createdAt    DateTime               @default(now())
+  updatedAt    DateTime               @updatedAt
+  deletedAt    DateTime?
+
+  @@unique([divisionId, code])
+}
+
+model ProcedurePrice {
+  id            Int          @id @default(autoincrement())
+  divisionId    Int
+  division      Division     @relation(fields: [divisionId], references: [id])
+  procedureId   Int
+  procedure     Procedure    @relation(fields: [procedureId], references: [id])
+  coverageType  CoverageType
+  isapreId      Int?
+  isapre        Isapre?      @relation(fields: [isapreId], references: [id])
+  isaprePlanId  Int?
+  isaprePlan    IsaprePlan?  @relation(fields: [isaprePlanId], references: [id])
+  fonasaCode    String?
+  payerLabel    String?
+  price         Decimal      @db.Decimal(12, 2)
+  currency      String       @default("CLP")
+  effectiveFrom DateTime?
+  effectiveTo   DateTime?
+  active        Boolean      @default(true)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  deletedAt     DateTime?
+}
+
+model Professional {
+  id           Int                 @id @default(autoincrement())
+  divisionId   Int
+  division     Division            @relation(fields: [divisionId], references: [id])
+  type         ProfessionalType
+  rut          String?
+  firstName    String
+  lastName     String
+  specialty    String?
+  email        String?
+  phone        String?
+  active       Boolean             @default(true)
+  medicalFees  MedicalFee[]
+  quoteMembers QuoteProfessional[]
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+  deletedAt    DateTime?
+}
+
+model MedicalFee {
+  id             Int          @id @default(autoincrement())
+  divisionId     Int
+  division       Division     @relation(fields: [divisionId], references: [id])
+  professionalId Int
+  professional   Professional @relation(fields: [professionalId], references: [id])
+  procedureId    Int
+  procedure      Procedure    @relation(fields: [procedureId], references: [id])
+  coverageType   CoverageType
+  isapreId       Int?
+  isapre         Isapre?      @relation(fields: [isapreId], references: [id])
+  isaprePlanId   Int?
+  isaprePlan     IsaprePlan?  @relation(fields: [isaprePlanId], references: [id])
+  feeType        String?
+  amount         Decimal      @db.Decimal(12, 2)
+  active         Boolean      @default(true)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  deletedAt      DateTime?
+}
+
+model MedicalPackage {
+  id             Int                    @id @default(autoincrement())
+  divisionId     Int
+  division       Division               @relation(fields: [divisionId], references: [id])
+  code           String
+  name           String
+  description    String?
+  active         Boolean                @default(true)
+  items          MedicalPackageItem[]
+  procedureLinks ProcedurePackageLink[]
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+  deletedAt      DateTime?
+
+  @@unique([divisionId, code])
+}
+
+model MedicalPackageItem {
+  id          Int            @id @default(autoincrement())
+  packageId   Int
+  package     MedicalPackage @relation(fields: [packageId], references: [id])
+  procedureId Int
+  procedure   Procedure      @relation(fields: [procedureId], references: [id])
+  quantity    Int            @default(1)
+  priceMode   String         @default("AGREEMENT_PRICE")
+  fixedPrice  Decimal?       @db.Decimal(12, 2)
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  deletedAt   DateTime?
+}
+
+model ProcedurePackageLink {
+  id          Int            @id @default(autoincrement())
+  procedureId Int
+  procedure   Procedure      @relation(fields: [procedureId], references: [id])
+  packageId   Int
+  package     MedicalPackage @relation(fields: [packageId], references: [id])
+  divisionId  Int
+  division    Division       @relation(fields: [divisionId], references: [id])
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  deletedAt   DateTime?
+
+  @@unique([procedureId, packageId])
+}
+
+model Basket {
+  id          Int          @id @default(autoincrement())
+  divisionId  Int
+  division    Division     @relation(fields: [divisionId], references: [id])
+  code        String
+  name        String
+  description String?
+  active      Boolean      @default(true)
+  items       BasketItem[]
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  deletedAt   DateTime?
+
+  @@unique([divisionId, code])
+}
+
+model BasketItem {
+  id             Int       @id @default(autoincrement())
+  basketId       Int
+  basket         Basket    @relation(fields: [basketId], references: [id])
+  procedureId    Int
+  procedure      Procedure @relation(fields: [procedureId], references: [id])
+  quantity       Int       @default(1)
+  relevanceScore Decimal?  @db.Decimal(5, 2)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  deletedAt      DateTime?
+}
+
+model Quote {
+  id              Int                 @id @default(autoincrement())
+  divisionId      Int
+  division        Division            @relation(fields: [divisionId], references: [id])
+  patientId       Int
+  patient         Patient             @relation(fields: [patientId], references: [id])
+  coverageType    CoverageType
+  isapreId        Int?
+  isapre          Isapre?             @relation(fields: [isapreId], references: [id])
+  isaprePlanId    Int?
+  isaprePlan      IsaprePlan?         @relation(fields: [isaprePlanId], references: [id])
+  fonasaCode      String?
+  payerLabel      String?
+  careType        CareType
+  status          QuoteStatus         @default(DRAFT)
+  validityDays    Int                 @default(15)
+  subtotal        Decimal             @db.Decimal(12, 2)
+  discountTotal   Decimal             @db.Decimal(12, 2)
+  total           Decimal             @db.Decimal(12, 2)
+  notes           String?
+  createdByUserId Int
+  createdBy       User                @relation("QuoteCreatedBy", fields: [createdByUserId], references: [id])
+  professionals   QuoteProfessional[]
+  items           QuoteItem[]
+  emailLogs       QuoteEmailLog[]
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+  deletedAt       DateTime?
+}
+
+model QuoteProfessional {
+  id               Int              @id @default(autoincrement())
+  quoteId          Int
+  quote            Quote            @relation(fields: [quoteId], references: [id])
+  professionalId   Int
+  professional     Professional     @relation(fields: [professionalId], references: [id])
+  roleInSurgery    String?
+  professionalType ProfessionalType
+  feeAmount        Decimal          @db.Decimal(12, 2)
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+  deletedAt        DateTime?
+}
+
+model QuoteItem {
+  id          Int                 @id @default(autoincrement())
+  quoteId     Int
+  quote       Quote               @relation(fields: [quoteId], references: [id])
+  sourceType  QuoteItemSourceType
+  sourceId    Int?
+  description String
+  quantity    Int                 @default(1)
+  unitPrice   Decimal             @db.Decimal(12, 2)
+  totalPrice  Decimal             @db.Decimal(12, 2)
+  metadata    Json?
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+  deletedAt   DateTime?
+}
+
+model QuoteEmailLog {
+  id             Int       @id @default(autoincrement())
+  quoteId        Int
+  quote          Quote     @relation(fields: [quoteId], references: [id])
+  recipientEmail String
+  recipientType  String
+  sentAt         DateTime?
+  status         String
+  errorMessage   String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  deletedAt      DateTime?
+}

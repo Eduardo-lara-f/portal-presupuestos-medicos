@@ -1,0 +1,26 @@
+{
+  "name": "portal-presupuestos-medicos",
+  "private": true,
+  "packageManager": "pnpm@10.0.0",
+  "scripts": {
+    "dev": "pnpm --parallel --filter ./apps/web --filter ./apps/api run dev",
+    "build": "pnpm -r run build",
+    "lint": "pnpm -r run lint"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "@types/pg": "^8.18.0",
+    "eslint": "^10.0.3",
+    "prettier": "^3.8.1",
+    "prisma": "^7.5.0",
+    "tsx": "^4.21.0",
+    "turbo": "^2.8.18",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "@prisma/adapter-pg": "^7.5.0",
+    "@prisma/client": "^7.5.0",
+    "dotenv": "^17.3.1",
+    "pg": "^8.20.0"
+  }
+}
