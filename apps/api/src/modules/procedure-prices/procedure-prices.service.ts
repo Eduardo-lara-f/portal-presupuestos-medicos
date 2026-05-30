@@ -1,64 +1,524 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { CoverageType } from '@prisma/client';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { CoverageType, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
-
-type ResolvePriceParams = {
-  divisionId: number;
-  procedureId: number;
-  coverageType: CoverageType;
-  isapreId?: number;
-  isaprePlanId?: number;
-  fonasaCode?: string;
-};
+import { CreateProcedurePriceDto } from './dto/create-procedure-price.dto';
+import { UpdateProcedurePriceDto } from './dto/update-procedure-price.dto';
 
 @Injectable()
 export class ProcedurePricesService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async resolve(params: ResolvePriceParams) {
-    const { divisionId, procedureId, coverageType, isapreId, isaprePlanId, fonasaCode } = params;
+  async resolve(params: {
+    divisionId: number;
+    procedureId: number;
+    coverageType: CoverageType;
+    isapreId?: number;
+    isaprePlanId?: number;
+    fonasaCode?: string;
+  }) {
+    const now = new Date();
 
-    if (coverageType === CoverageType.ISAPRE_PLAN && !isaprePlanId) {
-      throw new BadRequestException('isaprePlanId es obligatorio para coverageType=ISAPRE_PLAN');
+    const where: Prisma.ProcedurePriceWhereInput = {
+      deletedAt: null,
+      active: true,
+      divisionId: params.divisionId,
+      procedureId: params.procedureId,
+      coverageType: params.coverageType,
+      OR: [
+        {
+          AND: [{ effectiveFrom: null }, { effectiveTo: null }],
+        },
+        {
+          AND: [{ effectiveFrom: { lte: now } }, { effectiveTo: null }],
+        },
+        {
+          AND: [{ effectiveFrom: null }, { effectiveTo: { gte: now } }],
+        },
+        {
+          AND: [
+            { effectiveFrom: { lte: now } },
+            { effectiveTo: { gte: now } },
+          ],
+        },
+      ],
+    };
+
+    if (params.coverageType === CoverageType.ISAPRE_PLAN) {
+      if (!params.isapreId || !params.isaprePlanId) {
+        throw new BadRequestException(
+          'Para cobertura ISAPRE_PLAN debe indicar isapreId e isaprePlanId.',
+        );
+      }
+
+      where.isapreId = params.isapreId;
+      where.isaprePlanId = params.isaprePlanId;
+      where.fonasaCode = null;
     }
 
-    if (coverageType === CoverageType.FONASA && !fonasaCode) {
-      throw new BadRequestException('fonasaCode es obligatorio para coverageType=FONASA');
+    if (params.coverageType === CoverageType.FONASA) {
+      where.isapreId = null;
+      where.isaprePlanId = null;
+      where.fonasaCode = params.fonasaCode?.trim() || null;
     }
 
-    const price = await this.prisma.procedurePrice.findFirst({
+    if (
+      params.coverageType === CoverageType.PARTICULAR ||
+      params.coverageType === CoverageType.OTHER
+    ) {
+      where.isapreId = null;
+      where.isaprePlanId = null;
+      where.fonasaCode = null;
+    }
+
+    const record = await this.prisma.procedurePrice.findFirst({
+      where,
+      orderBy: [{ effectiveFrom: 'desc' }, { createdAt: 'desc' }],
+    });
+
+    if (!record) {
+      throw new NotFoundException(
+        'No existe un precio configurado para la combinación solicitada.',
+      );
+    }
+
+    return record;
+  }
+
+  async findAll(params: {
+    divisionId?: number;
+    procedureId?: number;
+    coverageType?: CoverageType;
+    active?: boolean;
+    search?: string;
+  }) {
+    const where: Prisma.ProcedurePriceWhereInput = {
+      deletedAt: null,
+    };
+
+    if (params.divisionId) {
+      where.divisionId = params.divisionId;
+    }
+
+    if (params.procedureId) {
+      where.procedureId = params.procedureId;
+    }
+
+    if (params.coverageType) {
+      where.coverageType = params.coverageType;
+    }
+
+    if (typeof params.active === 'boolean') {
+      where.active = params.active;
+    }
+
+    if (params.search?.trim()) {
+      const search = params.search.trim();
+
+      where.OR = [
+        {
+          procedure: {
+            code: {
+              contains: search,
+              mode: 'insensitive',
+            },
+          },
+        },
+        {
+          procedure: {
+            name: {
+              contains: search,
+              mode: 'insensitive',
+            },
+          },
+        },
+        {
+          payerLabel: {
+            contains: search,
+            mode: 'insensitive',
+          },
+        },
+        {
+          fonasaCode: {
+            contains: search,
+            mode: 'insensitive',
+          },
+        },
+      ];
+    }
+
+    return this.prisma.procedurePrice.findMany({
+      where,
+      orderBy: [
+        { divisionId: 'asc' },
+        { procedureId: 'asc' },
+        { createdAt: 'desc' },
+      ],
+      include: {
+        division: {
+          select: {
+            id: true,
+            name: true,
+            code: true,
+          },
+        },
+        procedure: {
+          select: {
+            id: true,
+            code: true,
+            name: true,
+            careType: true,
+            active: true,
+          },
+        },
+        isapre: {
+          select: {
+            id: true,
+            name: true,
+            code: true,
+          },
+        },
+        isaprePlan: {
+          select: {
+            id: true,
+            name: true,
+            code: true,
+          },
+        },
+      },
+    });
+  }
+
+  async findOne(id: number) {
+    const record = await this.prisma.procedurePrice.findFirst({
       where: {
-        divisionId,
-        procedureId,
-        coverageType,
-        isapreId: isapreId ?? undefined,
-        isaprePlanId: isaprePlanId ?? undefined,
-        fonasaCode: fonasaCode ?? undefined,
+        id,
         deletedAt: null,
-        active: true,
       },
-      orderBy: {
-        id: 'desc',
-      },
-      select: {
-        id: true,
-        divisionId: true,
-        procedureId: true,
-        coverageType: true,
-        isapreId: true,
-        isaprePlanId: true,
-        fonasaCode: true,
-        payerLabel: true,
-        price: true,
-        currency: true,
-        active: true,
+      include: {
+        division: {
+          select: {
+            id: true,
+            name: true,
+            code: true,
+          },
+        },
+        procedure: {
+          select: {
+            id: true,
+            code: true,
+            name: true,
+            careType: true,
+            active: true,
+          },
+        },
+        isapre: {
+          select: {
+            id: true,
+            name: true,
+            code: true,
+          },
+        },
+        isaprePlan: {
+          select: {
+            id: true,
+            name: true,
+            code: true,
+          },
+        },
       },
     });
 
-    if (!price) {
-      throw new NotFoundException('No se encontró precio para la combinación solicitada');
+    if (!record) {
+      throw new NotFoundException('Precio no encontrado.');
     }
 
-    return price;
+    return record;
+  }
+
+  private normalizeCoverageData(input: {
+    divisionId: number;
+    procedureId: number;
+    coverageType: CoverageType;
+    isapreId?: number;
+    isaprePlanId?: number;
+    fonasaCode?: string;
+    payerLabel?: string;
+    price: number;
+    currency?: string;
+    effectiveFrom?: string;
+    effectiveTo?: string;
+    active?: boolean;
+  }) {
+    const coverageType = input.coverageType;
+
+    let isapreId: number | null = input.isapreId ?? null;
+    let isaprePlanId: number | null = input.isaprePlanId ?? null;
+    let fonasaCode: string | null = input.fonasaCode?.trim() || null;
+    let payerLabel: string | null = input.payerLabel?.trim() || null;
+
+    if (coverageType === CoverageType.ISAPRE_PLAN) {
+      if (!isapreId || !isaprePlanId) {
+        throw new BadRequestException(
+          'Para cobertura ISAPRE_PLAN debe indicar isapre y plan.',
+        );
+      }
+
+      fonasaCode = null;
+      payerLabel = null;
+    }
+
+    if (coverageType === CoverageType.FONASA) {
+      isapreId = null;
+      isaprePlanId = null;
+      payerLabel = null;
+    }
+
+    if (
+      coverageType === CoverageType.PARTICULAR ||
+      coverageType === CoverageType.OTHER
+    ) {
+      isapreId = null;
+      isaprePlanId = null;
+      fonasaCode = null;
+    }
+
+    const effectiveFrom = input.effectiveFrom
+      ? new Date(input.effectiveFrom)
+      : null;
+
+    const effectiveTo = input.effectiveTo ? new Date(input.effectiveTo) : null;
+
+    if (effectiveFrom && effectiveTo && effectiveTo < effectiveFrom) {
+      throw new BadRequestException(
+        'effectiveTo no puede ser menor que effectiveFrom.',
+      );
+    }
+
+    return {
+      divisionId: input.divisionId,
+      procedureId: input.procedureId,
+      coverageType,
+      isapreId,
+      isaprePlanId,
+      fonasaCode,
+      payerLabel,
+      price: input.price,
+      currency: input.currency?.trim() || 'CLP',
+      effectiveFrom,
+      effectiveTo,
+      active: input.active ?? true,
+    };
+  }
+
+  private async ensureNoDuplicate(
+    normalized: {
+      divisionId: number;
+      procedureId: number;
+      coverageType: CoverageType;
+      isapreId: number | null;
+      isaprePlanId: number | null;
+      fonasaCode: string | null;
+      payerLabel: string | null;
+    },
+    ignoreId?: number,
+  ) {
+    const duplicated = await this.prisma.procedurePrice.findFirst({
+      where: {
+        id: ignoreId ? { not: ignoreId } : undefined,
+        deletedAt: null,
+        divisionId: normalized.divisionId,
+        procedureId: normalized.procedureId,
+        coverageType: normalized.coverageType,
+        isapreId: normalized.isapreId,
+        isaprePlanId: normalized.isaprePlanId,
+        fonasaCode: normalized.fonasaCode,
+        payerLabel: normalized.payerLabel,
+      },
+    });
+
+    if (duplicated) {
+      throw new ConflictException(
+        'Ya existe un precio con la misma combinación de división, prestación y cobertura.',
+      );
+    }
+  }
+
+  async create(dto: CreateProcedurePriceDto) {
+    const normalized = this.normalizeCoverageData({
+      ...dto,
+      active: true,
+    });
+
+    await this.ensureNoDuplicate(normalized);
+
+    return this.prisma.procedurePrice.create({
+      data: normalized,
+      include: {
+        division: {
+          select: {
+            id: true,
+            name: true,
+            code: true,
+          },
+        },
+        procedure: {
+          select: {
+            id: true,
+            code: true,
+            name: true,
+            careType: true,
+            active: true,
+          },
+        },
+        isapre: {
+          select: {
+            id: true,
+            name: true,
+            code: true,
+          },
+        },
+        isaprePlan: {
+          select: {
+            id: true,
+            name: true,
+            code: true,
+          },
+        },
+      },
+    });
+  }
+
+  async update(id: number, dto: UpdateProcedurePriceDto) {
+    const current = await this.prisma.procedurePrice.findFirst({
+      where: {
+        id,
+        deletedAt: null,
+      },
+    });
+
+    if (!current) {
+      throw new NotFoundException('Precio no encontrado.');
+    }
+
+    const normalized = this.normalizeCoverageData({
+      divisionId: dto.divisionId ?? current.divisionId,
+      procedureId: dto.procedureId ?? current.procedureId,
+      coverageType: dto.coverageType ?? current.coverageType,
+      isapreId: dto.isapreId ?? current.isapreId ?? undefined,
+      isaprePlanId: dto.isaprePlanId ?? current.isaprePlanId ?? undefined,
+      fonasaCode:
+        dto.fonasaCode !== undefined
+          ? dto.fonasaCode
+          : current.fonasaCode ?? undefined,
+      payerLabel:
+        dto.payerLabel !== undefined
+          ? dto.payerLabel
+          : current.payerLabel ?? undefined,
+      price: dto.price ?? Number(current.price),
+      currency: dto.currency ?? current.currency,
+      effectiveFrom:
+        dto.effectiveFrom !== undefined
+          ? dto.effectiveFrom
+          : current.effectiveFrom?.toISOString(),
+      effectiveTo:
+        dto.effectiveTo !== undefined
+          ? dto.effectiveTo
+          : current.effectiveTo?.toISOString(),
+      active: dto.active ?? current.active,
+    });
+
+    await this.ensureNoDuplicate(normalized, id);
+
+    return this.prisma.procedurePrice.update({
+      where: { id },
+      data: normalized,
+      include: {
+        division: {
+          select: {
+            id: true,
+            name: true,
+            code: true,
+          },
+        },
+        procedure: {
+          select: {
+            id: true,
+            code: true,
+            name: true,
+            careType: true,
+            active: true,
+          },
+        },
+        isapre: {
+          select: {
+            id: true,
+            name: true,
+            code: true,
+          },
+        },
+        isaprePlan: {
+          select: {
+            id: true,
+            name: true,
+            code: true,
+          },
+        },
+      },
+    });
+  }
+
+  async updateStatus(id: number, active: boolean) {
+    const current = await this.prisma.procedurePrice.findFirst({
+      where: {
+        id,
+        deletedAt: null,
+      },
+    });
+
+    if (!current) {
+      throw new NotFoundException('Precio no encontrado.');
+    }
+
+    return this.prisma.procedurePrice.update({
+      where: { id },
+      data: { active },
+      include: {
+        division: {
+          select: {
+            id: true,
+            name: true,
+            code: true,
+          },
+        },
+        procedure: {
+          select: {
+            id: true,
+            code: true,
+            name: true,
+            careType: true,
+            active: true,
+          },
+        },
+        isapre: {
+          select: {
+            id: true,
+            name: true,
+            code: true,
+          },
+        },
+        isaprePlan: {
+          select: {
+            id: true,
+            name: true,
+            code: true,
+          },
+        },
+      },
+    });
   }
 }

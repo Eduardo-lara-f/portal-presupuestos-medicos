@@ -1,0 +1,5 @@
+1) Levanta el backend / API de NestJS
+pnpm --filter api run dev
+
+2) Levanta el frontend / web de Next.js
+pnpm --filter web run dev

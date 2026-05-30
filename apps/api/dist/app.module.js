@@ -15,6 +15,7 @@ const isapres_module_1 = require("./modules/isapres/isapres.module");
 const procedures_module_1 = require("./modules/procedures/procedures.module");
 const procedure_prices_module_1 = require("./modules/procedure-prices/procedure-prices.module");
 const quotes_module_1 = require("./modules/quotes/quotes.module");
+const pdf_module_1 = require("./pdf/pdf.module");
 let AppModule = class AppModule {
 };
 exports.AppModule = AppModule;
@@ -28,6 +29,7 @@ exports.AppModule = AppModule = __decorate([
             procedures_module_1.ProceduresModule,
             procedure_prices_module_1.ProcedurePricesModule,
             quotes_module_1.QuotesModule,
+            pdf_module_1.PdfModule,
         ],
     })
 ], AppModule);
