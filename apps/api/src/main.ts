@@ -4,10 +4,16 @@ import { AppModule } from './app.module';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
-  app.enableCors();
+  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+  const port = Number(process.env.PORT || 3001);
 
-  await app.listen(3001);
-  console.log('API corriendo en http://localhost:3001');
+  app.enableCors({
+    origin: [frontendUrl],
+    credentials: true,
+  });
+
+  await app.listen(port, '0.0.0.0');
+  console.log(`API corriendo en puerto ${port}`);
 }
 
 bootstrap();
