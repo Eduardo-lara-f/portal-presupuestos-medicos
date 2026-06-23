@@ -28,15 +28,16 @@
     "pg": "^8.20.0",
     "puppeteer": "^25.0.2",
     "reflect-metadata": "^0.2.2",
-    "rxjs": "^7.8.2"
+    "rxjs": "^7.8.2",
+
+    "@types/express": "^5.0.6",
+    "@types/bcrypt": "^6.0.0",
+    "@types/passport-jwt": "^4.0.1"
   },
   "devDependencies": {
     "@nestjs/cli": "^11.0.16",
     "@nestjs/schematics": "^11.0.9",
     "@nestjs/testing": "^11.1.17",
-    "@types/bcrypt": "^6.0.0",
-    "@types/express": "^5.0.6",
-    "@types/passport-jwt": "^4.0.1",
     "@types/pg": "^8.18.0",
     "prisma": "^7.5.0",
     "tsconfig-paths": "^4.2.0",
