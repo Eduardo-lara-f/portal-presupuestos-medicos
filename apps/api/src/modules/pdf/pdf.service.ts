@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, InternalServerErrorException } from '@nestjs/common';
 import * as puppeteer from 'puppeteer';
 
 type PdfBudgetItem = {
@@ -21,9 +21,15 @@ export type GenerateBudgetPdfInput = {
     email?: string;
     phone?: string;
   };
-  coverage: {
+  coverage?: {
+    type?: string;
+    label?: string;
+    detailLabel?: string;
+    coverageName?: string;
     isapreName?: string;
     planName?: string;
+    fonasaCode?: string;
+    payerLabel?: string;
   };
   items: PdfBudgetItem[];
   subtotal: number;
@@ -41,11 +47,16 @@ export class PdfService {
     try {
       browser = await puppeteer.launch({
         headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox'],
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-gpu',
+        ],
       });
 
       const page = await browser.newPage();
-      const html = this.buildHtml(data);
+      const html = this.buildHtml(data ?? ({} as GenerateBudgetPdfInput));
 
       await page.setContent(html, {
         waitUntil: 'domcontentloaded',
@@ -65,6 +76,13 @@ export class PdfService {
       });
 
       return Buffer.from(pdf);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error('PDF generation error:', error);
+
+      throw new InternalServerErrorException(
+        `No se pudo generar el PDF: ${message}`,
+      );
     } finally {
       if (browser) {
         await browser.close();
@@ -73,14 +91,40 @@ export class PdfService {
   }
 
   private buildHtml(data: GenerateBudgetPdfInput): string {
+    const safeData = data ?? ({} as GenerateBudgetPdfInput);
+
     const generatedAt =
-      data.generatedAt ??
+      safeData.generatedAt ??
       new Date().toLocaleString('es-CL', {
         dateStyle: 'short',
         timeStyle: 'short',
       });
 
-    const itemsRows = data.items
+    const patient = safeData.patient ?? {
+      rut: '-',
+      fullName: '-',
+      email: '-',
+      phone: '-',
+    };
+
+    const coverage = safeData.coverage ?? {};
+    const coverageName =
+      coverage.coverageName ??
+      coverage.label ??
+      coverage.isapreName ??
+      coverage.payerLabel ??
+      coverage.type ??
+      '-';
+    const coverageDetail =
+      coverage.detailLabel ??
+      coverage.planName ??
+      coverage.fonasaCode ??
+      coverage.payerLabel ??
+      '-';
+
+    const items = Array.isArray(safeData.items) ? safeData.items : [];
+
+    const itemsRows = items
       .map(
         (item) => `
           <tr>
@@ -88,7 +132,7 @@ export class PdfService {
             <td>${this.escapeHtml(item.code)}</td>
             <td>${this.escapeHtml(item.name)}</td>
             <td style="text-align:right;">${this.escapeHtml(item.quantity)}</td>
-            <td style="text-align:right;">${item.appliedFactor === 1 ? '100%' : '50%'}</td>
+            <td style="text-align:right;">${this.formatFactor(item.appliedFactor)}</td>
             <td style="text-align:right;">${this.formatCurrency(item.unitPrice)}</td>
             <td style="text-align:right;">${this.formatCurrency(item.totalPrice)}</td>
           </tr>
@@ -222,25 +266,25 @@ export class PdfService {
           <div class="page">
             <div class="header">
               <h1>Presupuesto médico</h1>
-              <p>N° presupuesto: ${this.escapeHtml(data.quotationNumber ?? 'Borrador')}</p>
-              <p>División: ${this.escapeHtml(data.divisionName)}</p>
-              <p>Tipo: ${data.careType === 'AMBULATORY' ? 'Ambulatorio' : 'Quirúrgico'}</p>
+              <p>N° presupuesto: ${this.escapeHtml(safeData.quotationNumber ?? 'Borrador')}</p>
+              <p>División: ${this.escapeHtml(safeData.divisionName)}</p>
+              <p>Tipo: ${safeData.careType === 'AMBULATORY' ? 'Ambulatorio' : 'Quirúrgico'}</p>
               <p>Fecha de generación: ${this.escapeHtml(generatedAt)}</p>
             </div>
 
             <div class="grid">
               <div class="card">
                 <h2>Paciente</h2>
-                <div class="row"><span class="label">RUT</span><span class="value">${this.escapeHtml(data.patient.rut)}</span></div>
-                <div class="row"><span class="label">Nombre</span><span class="value">${this.escapeHtml(data.patient.fullName)}</span></div>
-                <div class="row"><span class="label">Correo</span><span class="value">${this.escapeHtml(data.patient.email)}</span></div>
-                <div class="row"><span class="label">Teléfono</span><span class="value">${this.escapeHtml(data.patient.phone)}</span></div>
+                <div class="row"><span class="label">RUT</span><span class="value">${this.escapeHtml(patient.rut)}</span></div>
+                <div class="row"><span class="label">Nombre</span><span class="value">${this.escapeHtml(patient.fullName)}</span></div>
+                <div class="row"><span class="label">Correo</span><span class="value">${this.escapeHtml(patient.email)}</span></div>
+                <div class="row"><span class="label">Teléfono</span><span class="value">${this.escapeHtml(patient.phone)}</span></div>
               </div>
 
               <div class="card">
                 <h2>Cobertura</h2>
-                <div class="row"><span class="label">Isapre</span><span class="value">${this.escapeHtml(data.coverage.isapreName)}</span></div>
-                <div class="row"><span class="label">Plan</span><span class="value">${this.escapeHtml(data.coverage.planName)}</span></div>
+                <div class="row"><span class="label">Convenio</span><span class="value">${this.escapeHtml(coverageName)}</span></div>
+                <div class="row"><span class="label">Detalle</span><span class="value">${this.escapeHtml(coverageDetail)}</span></div>
               </div>
             </div>
 
@@ -271,21 +315,21 @@ export class PdfService {
             <div class="totals">
               <div class="row">
                 <span class="label">Subtotal</span>
-                <span class="value">${this.formatCurrency(data.subtotal)}</span>
+                <span class="value">${this.formatCurrency(safeData.subtotal)}</span>
               </div>
               <div class="row">
                 <span class="label">Descuento</span>
-                <span class="value">${this.formatCurrency(data.discountTotal)}</span>
+                <span class="value">${this.formatCurrency(safeData.discountTotal)}</span>
               </div>
               <div class="row total">
                 <span>Total</span>
-                <span>${this.formatCurrency(data.total)}</span>
+                <span>${this.formatCurrency(safeData.total)}</span>
               </div>
             </div>
 
             <div class="notes">
               <h2>Observaciones</h2>
-              <div>${this.escapeHtml(data.notes)}</div>
+              <div>${this.escapeHtml(safeData.notes)}</div>
             </div>
           </div>
         </body>
@@ -301,6 +345,16 @@ export class PdfService {
       currency: 'CLP',
       maximumFractionDigits: 0,
     }).format(Number.isFinite(amount) ? amount : 0);
+  }
+
+  private formatFactor(value: unknown): string {
+    const factor = Number(value);
+
+    if (!Number.isFinite(factor)) {
+      return '-';
+    }
+
+    return `${Math.round(factor * 100)}%`;
   }
 
   private escapeHtml(value: unknown): string {

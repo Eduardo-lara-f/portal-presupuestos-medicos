@@ -13,6 +13,102 @@ import { UpdateProcedurePriceDto } from './dto/update-procedure-price.dto';
 export class ProcedurePricesService {
   constructor(private readonly prisma: PrismaService) {}
 
+  async getCatalog(divisionId: number) {
+    const prices = await this.prisma.procedurePrice.findMany({
+      where: {
+        divisionId,
+        deletedAt: null,
+        active: true,
+      },
+      select: {
+        coverageType: true,
+      },
+      distinct: ['coverageType'],
+    });
+
+    const enabledCoverageTypes = new Set(
+      prices.map((price) => price.coverageType),
+    );
+
+    const divisionIsapres = await this.prisma.divisionIsapre.findMany({
+      where: {
+        divisionId,
+        active: true,
+        deletedAt: null,
+        isapre: {
+          active: true,
+          deletedAt: null,
+        },
+      },
+      orderBy: {
+        isapre: {
+          name: 'asc',
+        },
+      },
+      select: {
+        isapre: {
+          select: {
+            id: true,
+            name: true,
+            code: true,
+            active: true,
+          },
+        },
+      },
+    });
+
+    const isapres = divisionIsapres.map((link) => link.isapre);
+    const hasActiveDivisionIsapres = isapres.length > 0;
+
+    const coverages = [
+      {
+        type: CoverageType.ISAPRE_PLAN,
+        label: 'Isapre / Plan',
+        enabled:
+          enabledCoverageTypes.has(CoverageType.ISAPRE_PLAN) ||
+          hasActiveDivisionIsapres,
+        requiresIsapre: true,
+        requiresPlan: true,
+        requiresFonasaCode: false,
+        requiresPayerLabel: false,
+      },
+      {
+        type: CoverageType.FONASA,
+        label: 'Fonasa',
+        enabled: enabledCoverageTypes.has(CoverageType.FONASA),
+        requiresIsapre: false,
+        requiresPlan: false,
+        requiresFonasaCode: true,
+        requiresPayerLabel: false,
+      },
+      {
+        type: CoverageType.PARTICULAR,
+        label: 'Particular',
+        enabled: enabledCoverageTypes.has(CoverageType.PARTICULAR),
+        requiresIsapre: false,
+        requiresPlan: false,
+        requiresFonasaCode: false,
+        requiresPayerLabel: true,
+      },
+      {
+        type: CoverageType.OTHER,
+        label: 'Otro pagador',
+        enabled: enabledCoverageTypes.has(CoverageType.OTHER),
+        requiresIsapre: false,
+        requiresPlan: false,
+        requiresFonasaCode: false,
+        requiresPayerLabel: true,
+      },
+    ];
+
+
+    return {
+      divisionId,
+      coverages,
+      isapres,
+    };
+  }
+
   async resolve(params: {
     divisionId: number;
     procedureId: number;

@@ -7,6 +7,7 @@ import { ProceduresModule } from './modules/procedures/procedures.module';
 import { ProcedurePricesModule } from './modules/procedure-prices/procedure-prices.module';
 import { QuotesModule } from './modules/quotes/quotes.module';
 import { AuthModule } from './modules/auth/auth.module';
+import { UsersModule } from './modules/users/users.module';
 import { PdfModule } from './modules/pdf/pdf.module';
 import { BasketsModule } from './modules/baskets/baskets.module';
 import { PackagesModule } from './modules/packages/packages.module';
@@ -21,6 +22,7 @@ import { PackagesModule } from './modules/packages/packages.module';
     ProcedurePricesModule,
     QuotesModule,
     AuthModule,
+    UsersModule,
     PdfModule,
     BasketsModule,
     PackagesModule,

@@ -1,7 +1,6 @@
 'use client';
 
 import { FormEvent, useState } from 'react';
-import { useRouter } from 'next/navigation';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 
@@ -13,13 +12,22 @@ type LoginResponse = {
     email: string;
     role: string;
     status: boolean;
+    divisionId: number | null;
+    division: {
+      id: number;
+      name: string;
+      code: string;
+      corporationId: number | null;
+      brandPrimaryColor: string;
+      brandSecondaryColor: string;
+      brandAccentColor: string;
+      brandLogoKey: string;
+    } | null;
   };
 };
 
 export default function LoginPage() {
-  const router = useRouter();
-
-  const [email, setEmail] = useState('admin@demo.cl');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('123456');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -74,7 +82,7 @@ export default function LoginPage() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               className="w-full rounded-md border border-slate-300 px-3 py-2 outline-none"
-              placeholder="admin@demo.cl"
+              placeholder="usuario@clinica.cl"
             />
           </div>
 

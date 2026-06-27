@@ -39,6 +39,22 @@ export class PackagesController {
     });
   }
 
+  @Get('by-procedure')
+  async findByProcedure(
+    @Query('procedureId', ParseIntPipe) procedureId: number,
+    @Query('divisionId', ParseIntPipe) divisionId: number,
+  ) {
+    return this.packagesService.findByProcedure({
+      procedureId,
+      divisionId,
+    });
+  }
+
+  @Post('evaluate')
+  async evaluate(@Body() body: unknown) {
+    return this.packagesService.evaluate(body);
+  }
+
   @Get(':id')
   async findOne(@Param('id', ParseIntPipe) id: number) {
     return this.packagesService.findOne(id);

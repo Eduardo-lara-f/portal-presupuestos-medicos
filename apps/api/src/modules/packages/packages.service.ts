@@ -74,6 +74,95 @@ export class PackagesService {
     });
   }
 
+  async findByProcedure(params: { procedureId: number; divisionId: number }) {
+    const packages = await this.prisma.medicalPackage.findMany({
+      where: {
+        divisionId: params.divisionId,
+        active: true,
+        deletedAt: null,
+        items: {
+          some: {
+            procedureId: params.procedureId,
+            deletedAt: null,
+          },
+        },
+      },
+      orderBy: {
+        name: 'asc',
+      },
+      select: {
+        id: true,
+        code: true,
+        name: true,
+        packageType: true,
+        padCoverageMode: true,
+      },
+    });
+
+    return {
+      hasPackage: packages.length > 0,
+      packages,
+    };
+  }
+
+  async evaluate(body: unknown) {
+    const payload = body as { packageId?: number | string };
+    const packageId = Number(payload.packageId);
+
+    if (!Number.isInteger(packageId) || packageId <= 0) {
+      throw new BadRequestException('El ID del paquete es obligatorio.');
+    }
+
+    const record = await this.prisma.medicalPackage.findFirst({
+      where: {
+        id: packageId,
+        active: true,
+        deletedAt: null,
+      },
+      select: {
+        id: true,
+        packageType: true,
+        padCoverageMode: true,
+        campaigns: {
+          where: {
+            active: true,
+          },
+          orderBy: {
+            id: 'asc',
+          },
+          take: 1,
+          select: {
+            id: true,
+            name: true,
+            discountPercentage: true,
+          },
+        },
+      },
+    });
+
+    if (!record) {
+      throw new NotFoundException('Paquete no encontrado.');
+    }
+
+    const isPad = record.packageType === 'PAD';
+    const campaign = record.campaigns[0] ?? null;
+
+    return {
+      packageId: record.id,
+      packageType: record.packageType,
+      padCoverageMode: record.padCoverageMode,
+      isPad,
+      requiresCampaignSelection: !isPad && !!campaign,
+      campaign: campaign
+        ? {
+            id: campaign.id,
+            name: campaign.name,
+            discountPercentage: Number(campaign.discountPercentage),
+          }
+        : null,
+    };
+  }
+
   async findOne(id: number) {
     const record = await this.prisma.medicalPackage.findFirst({
       where: {

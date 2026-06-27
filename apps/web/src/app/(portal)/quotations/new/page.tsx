@@ -3,8 +3,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
 
 type CareType = 'AMBULATORY' | 'SURGICAL' | 'BOTH';
+type CareAccess = 'AMBULATORY' | 'SURGICAL' | 'BOTH';
 type Step = 0 | 1 | 2 | 3;
 type BillingSection = 'PROCEDURE' | 'SUPPLY' | 'DRUG' | 'BED';
+type CoverageType = 'ISAPRE_PLAN' | 'FONASA' | 'PARTICULAR' | 'OTHER';
 
 type Division = {
   id: number;
@@ -42,6 +44,22 @@ type IsaprePlan = {
   active: boolean;
 };
 
+type CoverageCatalogItem = {
+  type: CoverageType;
+  label: string;
+  enabled: boolean;
+  requiresIsapre: boolean;
+  requiresPlan: boolean;
+  requiresFonasaCode: boolean;
+  requiresPayerLabel: boolean;
+};
+
+type CoverageCatalogResponse = {
+  divisionId: number;
+  coverages: CoverageCatalogItem[];
+  isapres: Isapre[];
+};
+
 type Procedure = {
   id: number;
   divisionId: number;
@@ -57,9 +75,11 @@ type ProcedurePriceResponse = {
   id: number;
   divisionId: number;
   procedureId: number;
-  coverageType: string;
+  coverageType: CoverageType;
   isapreId?: number | null;
   isaprePlanId?: number | null;
+  fonasaCode?: string | null;
+  payerLabel?: string | null;
   price: string;
   currency: string;
   active: boolean;
@@ -86,6 +106,7 @@ type PackageResponse = {
   code: string;
   name: string;
   description?: string | null;
+  packageType?: 'PAD' | 'CONVENTIONAL' | null;
   active: boolean;
   items: Array<{
     procedureId: number;
@@ -96,10 +117,53 @@ type PackageResponse = {
   }>;
 };
 
-type BudgetSourceType = 'PROCEDURE' | 'BASKET' | 'PACKAGE';
+type PackageSuggestionResult = {
+  id: number;
+  code: string;
+  name: string;
+  packageType?: 'PAD' | 'CONVENTIONAL' | null;
+};
+
+type PackageByProcedureResponse = {
+  hasPackage: boolean;
+  packages: PackageSuggestionResult[];
+};
+
+type PackageEvaluationResponse = {
+  packageId: number;
+  packageType?: 'PAD' | 'CONVENTIONAL' | null;
+  isPad: boolean;
+  requiresCampaignSelection: boolean;
+  campaign: {
+    id: number;
+    name: string;
+    discountPercentage: number;
+  } | null;
+};
+
+type QuoteItemResponse = {
+  id: number;
+  parentId?: number | null;
+  sourceId: number;
+  sourceType: string;
+  description: string;
+  quantity: number;
+  unitPrice: string | number;
+  totalPrice: string | number;
+  type: string;
+  editable?: boolean | null;
+};
+
+type QuoteResponse = {
+  id: number;
+  items: QuoteItemResponse[];
+};
+
+type BudgetSourceType = 'PROCEDURE' | 'BASKET' | 'PACKAGE' | 'MEDICAL_FEE';
 
 type BudgetItem = {
   localId: string;
+  quoteItemId?: number | null;
   sourceId: string | number;
   sourceType: BudgetSourceType;
   parentGroupId?: number | null;
@@ -122,9 +186,51 @@ type AlertState = {
   message: string;
 } | null;
 
+type PendingPackageSuggestion = {
+  procedure: Procedure;
+  packages: PackageSuggestionResult[];
+};
+
+type PendingCampaignSelection = {
+  pkg: PackageResponse;
+  evaluation: PackageEvaluationResponse;
+};
+
+type PendingPadSelection = {
+  pkg: PackageResponse;
+};
+
 type FieldProps = {
   label: string;
   children: React.ReactNode;
+};
+
+type AuthUser = {
+  id: number;
+  name: string;
+  email: string;
+  role: string;
+  careAccess?: CareAccess | null;
+  status: boolean;
+  divisionId?: number | null;
+  division?: {
+    id: number;
+    name: string;
+    code?: string;
+    corporationId?: number | null;
+    brandPrimaryColor?: string;
+    brandSecondaryColor?: string;
+    brandAccentColor?: string;
+    brandLogoKey?: string;
+  } | null;
+};
+
+type AddedGroupSummary = {
+  groupKey: string;
+  groupId: number;
+  groupName: string;
+  groupType: 'BASKET' | 'PACKAGE';
+  itemCount: number;
 };
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
@@ -178,14 +284,6 @@ function formatCurrency(value: number) {
   }).format(value);
 }
 
-type AddedGroupSummary = {
-  groupKey: string;
-  groupId: number;
-  groupName: string;
-  groupType: 'BASKET' | 'PACKAGE';
-  itemCount: number;
-};
-
 function resolveBillingSectionFromProcedure(procedure: Procedure): BillingSection {
   const category = procedure.category?.trim().toUpperCase();
 
@@ -196,14 +294,14 @@ function resolveBillingSectionFromProcedure(procedure: Procedure): BillingSectio
   return 'PROCEDURE';
 }
 
-
 export default function NewQuotationPage() {
   const [careType, setCareType] = useState<CareType | null>(null);
   const [currentStep, setCurrentStep] = useState<Step>(0);
 
-  const [divisions, setDivisions] = useState<Division[]>([]);
-  const [loadingDivisions, setLoadingDivisions] = useState(false);
+  const [, setAuthUser] = useState<AuthUser | null>(null);
+  const [userCareAccess, setUserCareAccess] = useState<CareAccess>('BOTH');
   const [selectedDivisionId, setSelectedDivisionId] = useState('');
+  const [selectedDivisionName, setSelectedDivisionName] = useState('-');
 
   const [loadingPatient, setLoadingPatient] = useState(false);
   const [savingPatient, setSavingPatient] = useState(false);
@@ -218,6 +316,11 @@ export default function NewQuotationPage() {
   const [phone, setPhone] = useState('');
   const [address, setAddress] = useState('');
 
+  const [coverageCatalog, setCoverageCatalog] = useState<CoverageCatalogItem[]>([]);
+  const [loadingCoverageCatalog, setLoadingCoverageCatalog] = useState(false);
+  const [selectedCoverageType, setSelectedCoverageType] =
+    useState<CoverageType>('ISAPRE_PLAN');
+
   const [isapres, setIsapres] = useState<Isapre[]>([]);
   const [loadingIsapres, setLoadingIsapres] = useState(false);
   const [selectedIsapreId, setSelectedIsapreId] = useState('');
@@ -225,6 +328,9 @@ export default function NewQuotationPage() {
   const [plans, setPlans] = useState<IsaprePlan[]>([]);
   const [loadingPlans, setLoadingPlans] = useState(false);
   const [selectedPlanId, setSelectedPlanId] = useState('');
+
+  const [fonasaCode, setFonasaCode] = useState('');
+  const [payerLabel, setPayerLabel] = useState('');
 
   const [procedureSearch, setProcedureSearch] = useState('');
   const [procedureResults, setProcedureResults] = useState<Procedure[]>([]);
@@ -241,12 +347,66 @@ export default function NewQuotationPage() {
   const [loadingPackages, setLoadingPackages] = useState(false);
   const [addingPackageId, setAddingPackageId] = useState<number | null>(null);
 
+  const [showBasketFinder, setShowBasketFinder] = useState(false);
+  const [showPackageFinder, setShowPackageFinder] = useState(false);
+
+  const [pendingPackageSuggestion, setPendingPackageSuggestion] =
+    useState<PendingPackageSuggestion | null>(null);
+  const [pendingCampaignSelection, setPendingCampaignSelection] =
+    useState<PendingCampaignSelection | null>(null);
+  const [pendingPadSelection, setPendingPadSelection] =
+    useState<PendingPadSelection | null>(null);
+  const [processingPackageFlow, setProcessingPackageFlow] = useState(false);
+
   const [budgetItems, setBudgetItems] = useState<BudgetItem[]>([]);
   const [discountTotal, setDiscountTotal] = useState('0');
   const [notes, setNotes] = useState('');
   const [generatingPdf, setGeneratingPdf] = useState(false);
 
+  const [quoteId, setQuoteId] = useState<number | null>(null);
+  const [createdByUserId, setCreatedByUserId] = useState<number | null>(null);
+
   const [alert, setAlert] = useState<AlertState>(null);
+
+  const currentCoverageConfig = useMemo(() => {
+    return (
+      coverageCatalog.find((item) => item.type === selectedCoverageType) ?? null
+    );
+  }, [coverageCatalog, selectedCoverageType]);
+
+  const allowedCareTypes = useMemo(() => {
+    return {
+      ambulatory: userCareAccess === 'AMBULATORY' || userCareAccess === 'BOTH',
+      surgical: userCareAccess === 'SURGICAL' || userCareAccess === 'BOTH',
+    };
+  }, [userCareAccess]);
+
+  useEffect(() => {
+    try {
+      const rawAuthUser = localStorage.getItem('authUser');
+      if (!rawAuthUser) return;
+
+      const parsedAuthUser = JSON.parse(rawAuthUser) as AuthUser;
+
+      if (typeof parsedAuthUser?.id === 'number') {
+        setCreatedByUserId(parsedAuthUser.id);
+      }
+
+      setAuthUser(parsedAuthUser);
+      setUserCareAccess(parsedAuthUser.careAccess ?? 'BOTH');
+
+      const divisionId =
+        parsedAuthUser?.divisionId ?? parsedAuthUser?.division?.id ?? null;
+      const divisionName = parsedAuthUser?.division?.name ?? '-';
+
+      if (typeof divisionId === 'number') {
+        setSelectedDivisionId(String(divisionId));
+        setSelectedDivisionName(divisionName);
+      }
+    } catch (error) {
+      console.error(error);
+    }
+  }, []);
 
   useEffect(() => {
     if (!alert) return;
@@ -254,6 +414,148 @@ export default function NewQuotationPage() {
     const timer = window.setTimeout(() => setAlert(null), duration);
     return () => window.clearTimeout(timer);
   }, [alert]);
+
+  useEffect(() => {
+    async function loadCoverageCatalog() {
+      if (!selectedDivisionId) {
+        setCoverageCatalog([]);
+        setIsapres([]);
+        setSelectedCoverageType('ISAPRE_PLAN');
+        setSelectedIsapreId('');
+        setSelectedPlanId('');
+        setFonasaCode('');
+        setPayerLabel('');
+        return;
+      }
+
+      try {
+        setLoadingCoverageCatalog(true);
+        setLoadingIsapres(true);
+
+        const response = await fetch(
+          `${API_URL}/procedure-prices/catalog?divisionId=${selectedDivisionId}`,
+        );
+
+        if (!response.ok) {
+          const message = await getApiErrorMessage(
+            response,
+            'No se pudo cargar el catálogo de coberturas.',
+          );
+
+          console.error('Error cargando catálogo de coberturas', {
+            status: response.status,
+            statusText: response.statusText,
+            message,
+            url: `${API_URL}/procedure-prices/catalog?divisionId=${selectedDivisionId}`,
+          });
+
+          throw new Error(message);
+        }
+
+        const data: CoverageCatalogResponse = await response.json();
+        setCoverageCatalog(data.coverages ?? []);
+        setIsapres(data.isapres ?? []);
+
+        const enabledCoverages = (data.coverages ?? []).filter((item) => item.enabled);
+        const isapreCoverage = enabledCoverages.find(
+          (item) => item.type === 'ISAPRE_PLAN',
+        );
+
+        const nextCoverageType =
+          isapreCoverage?.type ?? enabledCoverages[0]?.type ?? 'ISAPRE_PLAN';
+
+        setSelectedCoverageType(nextCoverageType);
+
+        if (nextCoverageType === 'ISAPRE_PLAN') {
+          const firstIsapreId = data.isapres?.[0]?.id;
+          setSelectedIsapreId(firstIsapreId ? String(firstIsapreId) : '');
+          setSelectedPlanId('');
+        } else {
+          setSelectedIsapreId('');
+          setSelectedPlanId('');
+          setPlans([]);
+        }
+
+        if (nextCoverageType !== 'FONASA') {
+          setFonasaCode('');
+        }
+
+        if (nextCoverageType !== 'PARTICULAR' && nextCoverageType !== 'OTHER') {
+          setPayerLabel('');
+        }
+      } catch (error) {
+        console.error(error);
+        setCoverageCatalog([]);
+        setIsapres([]);
+        setAlert({
+          type: 'error',
+          message:
+            error instanceof Error
+              ? error.message
+              : 'No se pudieron cargar las coberturas de la división seleccionada.',
+        });
+      } finally {
+        setLoadingCoverageCatalog(false);
+        setLoadingIsapres(false);
+      }
+    }
+
+    loadCoverageCatalog();
+  }, [selectedDivisionId]);
+
+  useEffect(() => {
+    async function loadPlans() {
+      if (!selectedIsapreId || selectedCoverageType !== 'ISAPRE_PLAN') {
+        setPlans([]);
+        setSelectedPlanId('');
+        return;
+      }
+
+      try {
+        setLoadingPlans(true);
+
+        const response = await fetch(`${API_URL}/isapres/${selectedIsapreId}/plans`);
+        if (!response.ok) {
+          throw new Error('No se pudieron cargar los planes.');
+        }
+
+        const data: IsaprePlan[] = await response.json();
+        setPlans(data);
+        setSelectedPlanId((currentPlanId) => {
+          const currentPlanStillExists = data.some(
+            (plan) => String(plan.id) === currentPlanId,
+          );
+
+          if (currentPlanStillExists) {
+            return currentPlanId;
+          }
+
+          return data[0]?.id ? String(data[0].id) : '';
+        });
+      } catch (error) {
+        console.error(error);
+        setAlert({
+          type: 'error',
+          message: 'No se pudieron cargar los planes de la isapre seleccionada.',
+        });
+      } finally {
+        setLoadingPlans(false);
+      }
+    }
+
+    loadPlans();
+  }, [selectedIsapreId, selectedCoverageType]);
+
+  useEffect(() => {
+    if (careType === 'AMBULATORY') {
+      setShowPackageFinder(false);
+      setPendingPackageSuggestion(null);
+      setPendingCampaignSelection(null);
+      setPendingPadSelection(null);
+      setPackageResults([]);
+      setPackageSearch('');
+    }
+  }, [careType]);
 
   const stepTitle = useMemo(() => {
     const titles: Record<Step, string> = {
@@ -273,6 +575,13 @@ export default function NewQuotationPage() {
     return subtotal - Number(discountTotal || 0);
   }, [subtotal, discountTotal]);
 
+  const selectedCoverageName = useMemo(() => {
+    return (
+      coverageCatalog.find((item) => item.type === selectedCoverageType)?.label ??
+      selectedCoverageType
+    );
+  }, [coverageCatalog, selectedCoverageType]);
+
   const selectedIsapreName = useMemo(() => {
     return isapres.find((item) => String(item.id) === selectedIsapreId)?.name ?? '-';
   }, [isapres, selectedIsapreId]);
@@ -281,9 +590,31 @@ export default function NewQuotationPage() {
     return plans.find((item) => String(item.id) === selectedPlanId)?.name ?? '-';
   }, [plans, selectedPlanId]);
 
-  const selectedDivisionName = useMemo(() => {
-    return divisions.find((item) => String(item.id) === selectedDivisionId)?.name ?? '-';
-  }, [divisions, selectedDivisionId]);
+  const coverageDetailLabel = useMemo(() => {
+    if (selectedCoverageType === 'ISAPRE_PLAN') {
+      if (selectedIsapreName !== '-' && selectedPlanName !== '-') {
+        return `${selectedIsapreName} / ${selectedPlanName}`;
+      }
+
+      return '-';
+    }
+
+    if (selectedCoverageType === 'FONASA') {
+      return fonasaCode.trim() || '-';
+    }
+
+    if (selectedCoverageType === 'PARTICULAR' || selectedCoverageType === 'OTHER') {
+      return payerLabel.trim() || '-';
+    }
+
+    return '-';
+  }, [
+    selectedCoverageType,
+    selectedIsapreName,
+    selectedPlanName,
+    fonasaCode,
+    payerLabel,
+  ]);
 
   const sectionTotals = useMemo(() => {
     const getTotal = (section: BillingSection) =>
@@ -326,108 +657,6 @@ export default function NewQuotationPage() {
     return Array.from(groups.values());
   }, [budgetItems]);
 
-  useEffect(() => {
-    async function loadDivisions() {
-      try {
-        setLoadingDivisions(true);
-        setAlert(null);
-
-        const response = await fetch(`${API_URL}/divisions`);
-        if (!response.ok) {
-          throw new Error('No se pudieron cargar las divisiones.');
-        }
-
-        const data: Division[] = await response.json();
-        setDivisions(data);
-
-        if (data.length > 0) {
-          setSelectedDivisionId(String(data[0].id));
-        }
-      } catch (error) {
-        console.error(error);
-        setAlert({
-          type: 'error',
-          message:
-            'No fue posible cargar las divisiones. Verifique que la API esté levantada y accesible.',
-        });
-      } finally {
-        setLoadingDivisions(false);
-      }
-    }
-
-    loadDivisions();
-  }, []);
-
-  useEffect(() => {
-    async function loadIsapres() {
-      if (!selectedDivisionId) {
-        setIsapres([]);
-        setSelectedIsapreId('');
-        setPlans([]);
-        setSelectedPlanId('');
-        return;
-      }
-
-      try {
-        setLoadingIsapres(true);
-
-        const response = await fetch(`${API_URL}/isapres?divisionId=${selectedDivisionId}`);
-        if (!response.ok) {
-          throw new Error('No se pudieron cargar las isapres.');
-        }
-
-        const data: Isapre[] = await response.json();
-        setIsapres(data);
-        setSelectedIsapreId('');
-        setPlans([]);
-        setSelectedPlanId('');
-      } catch (error) {
-        console.error(error);
-        setAlert({
-          type: 'error',
-          message: 'No se pudieron cargar las isapres de la división seleccionada.',
-        });
-      } finally {
-        setLoadingIsapres(false);
-      }
-    }
-
-    loadIsapres();
-  }, [selectedDivisionId]);
-
-  useEffect(() => {
-    async function loadPlans() {
-      if (!selectedIsapreId) {
-        setPlans([]);
-        setSelectedPlanId('');
-        return;
-      }
-
-      try {
-        setLoadingPlans(true);
-
-        const response = await fetch(`${API_URL}/isapres/${selectedIsapreId}/plans`);
-        if (!response.ok) {
-          throw new Error('No se pudieron cargar los planes.');
-        }
-
-        const data: IsaprePlan[] = await response.json();
-        setPlans(data);
-        setSelectedPlanId('');
-      } catch (error) {
-        console.error(error);
-        setAlert({
-          type: 'error',
-          message: 'No se pudieron cargar los planes de la isapre seleccionada.',
-        });
-      } finally {
-        setLoadingPlans(false);
-      }
-    }
-
-    loadPlans();
-  }, [selectedIsapreId]);
-
   function goToNextStep() {
     if (currentStep < 3) {
       setCurrentStep((prev) => (prev + 1) as Step);
@@ -441,6 +670,22 @@ export default function NewQuotationPage() {
   }
 
   function selectCareType(value: CareType) {
+    if (value === 'AMBULATORY' && !allowedCareTypes.ambulatory) {
+      setAlert({
+        type: 'warning',
+        message: 'Su usuario no tiene acceso al módulo ambulatorio.',
+      });
+      return;
+    }
+
+    if (value === 'SURGICAL' && !allowedCareTypes.surgical) {
+      setAlert({
+        type: 'warning',
+        message: 'Su usuario no tiene acceso al módulo quirúrgico.',
+      });
+      return;
+    }
+
     setCareType(value);
     setCurrentStep(1);
     setAlert(null);
@@ -545,11 +790,53 @@ export default function NewQuotationPage() {
     setRut(formatRut(rut));
   }
 
+  function handleCoverageTypeSelection(nextType: CoverageType) {
+    setSelectedCoverageType(nextType);
+
+    if (nextType !== 'ISAPRE_PLAN') {
+      setSelectedIsapreId('');
+      setSelectedPlanId('');
+      setPlans([]);
+    }
+
+    if (nextType !== 'FONASA') {
+      setFonasaCode('');
+    }
+
+    if (nextType !== 'PARTICULAR' && nextType !== 'OTHER') {
+      setPayerLabel('');
+    }
+  }
+
+  function validateCoverageSelection() {
+    if (!currentCoverageConfig?.enabled) {
+      return 'La cobertura seleccionada no está habilitada para la división.';
+    }
+
+    if (currentCoverageConfig.requiresIsapre && !selectedIsapreId) {
+      return 'Seleccione una isapre antes de continuar.';
+    }
+
+    if (currentCoverageConfig.requiresPlan && !selectedPlanId) {
+      return 'Seleccione un plan antes de continuar.';
+    }
+
+    if (currentCoverageConfig.requiresFonasaCode && !fonasaCode.trim()) {
+      return 'Ingrese el código Fonasa antes de continuar.';
+    }
+
+    if (currentCoverageConfig.requiresPayerLabel && !payerLabel.trim()) {
+      return 'Ingrese el pagador antes de continuar.';
+    }
+
+    return null;
+  }
+
   async function handleSearchPatient() {
     if (!rut.trim() || !selectedDivisionId) {
       setAlert({
         type: 'warning',
-        message: 'Debe seleccionar división e ingresar un RUT antes de buscar.',
+        message: 'Debe ingresar un RUT válido antes de buscar.',
       });
       return;
     }
@@ -628,16 +915,33 @@ export default function NewQuotationPage() {
       return;
     }
 
-    if (patientId) {
-      goToNextStep();
+    if (!selectedDivisionId) {
+      setAlert({
+        type: 'error',
+        message: 'No se pudo identificar la división asignada del usuario.',
+      });
       return;
     }
 
-    if (!selectedDivisionId || !rut.trim() || !firstName.trim() || !lastName.trim()) {
+    if (!patientId && (!rut.trim() || !firstName.trim() || !lastName.trim())) {
       setAlert({
         type: 'warning',
-        message: 'Complete división, RUT, nombres y apellidos antes de continuar.',
+        message: 'Complete RUT, nombres y apellidos antes de continuar.',
       });
+      return;
+    }
+
+    const coverageValidationError = validateCoverageSelection();
+    if (coverageValidationError) {
+      setAlert({
+        type: 'warning',
+        message: coverageValidationError,
+      });
+      return;
+    }
+
+    if (patientId) {
+      goToNextStep();
       return;
     }
 
@@ -699,23 +1003,30 @@ export default function NewQuotationPage() {
     }
   }
 
-  
   async function resolveProcedureAgreementPrice(procedureId: number) {
     if (!selectedDivisionId) {
       throw new Error('Seleccione una división antes de resolver precios.');
     }
 
-    if (!selectedIsapreId || !selectedPlanId) {
-      throw new Error('Seleccione isapre y plan antes de agregar ítems al presupuesto.');
+    const coverageValidationError = validateCoverageSelection();
+    if (coverageValidationError) {
+      throw new Error(coverageValidationError);
     }
 
     const params = new URLSearchParams({
       divisionId: selectedDivisionId,
       procedureId: String(procedureId),
-      coverageType: 'ISAPRE_PLAN',
-      isapreId: selectedIsapreId,
-      isaprePlanId: selectedPlanId,
+      coverageType: selectedCoverageType,
     });
+
+    if (selectedCoverageType === 'ISAPRE_PLAN') {
+      params.set('isapreId', selectedIsapreId);
+      params.set('isaprePlanId', selectedPlanId);
+    }
+
+    if (selectedCoverageType === 'FONASA' && fonasaCode.trim()) {
+      params.set('fonasaCode', fonasaCode.trim());
+    }
 
     const response = await fetch(`${API_URL}/procedure-prices/resolve?${params.toString()}`);
 
@@ -746,6 +1057,7 @@ export default function NewQuotationPage() {
   }): BudgetItem {
     return {
       localId: `${params.sourceType}-${params.procedure.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      quoteItemId: null,
       sourceId: params.procedure.id,
       sourceType: params.sourceType,
       parentGroupId: params.parentGroupId ?? null,
@@ -764,11 +1076,303 @@ export default function NewQuotationPage() {
     };
   }
 
+  function buildQuoteCoveragePayload() {
+    const base = {
+      coverageType: selectedCoverageType,
+      isapreId: undefined as number | undefined,
+      isaprePlanId: undefined as number | undefined,
+      fonasaCode: undefined as string | undefined,
+      payerLabel: undefined as string | undefined,
+    };
+
+    if (selectedCoverageType === 'ISAPRE_PLAN') {
+      return {
+        ...base,
+        isapreId: Number(selectedIsapreId),
+        isaprePlanId: Number(selectedPlanId),
+      };
+    }
+
+    if (selectedCoverageType === 'FONASA') {
+      return {
+        ...base,
+        fonasaCode: fonasaCode.trim() || undefined,
+      };
+    }
+
+    if (selectedCoverageType === 'PARTICULAR' || selectedCoverageType === 'OTHER') {
+      return {
+        ...base,
+        payerLabel: payerLabel.trim() || undefined,
+      };
+    }
+
+    return base;
+  }
+
+  async function ensureDraftQuote() {
+    if (quoteId) {
+      return quoteId;
+    }
+
+    if (!careType || !selectedDivisionId || !patientId || !createdByUserId) {
+      throw new Error('Faltan datos para crear el borrador de cotización.');
+    }
+
+    const coverageValidationError = validateCoverageSelection();
+    if (coverageValidationError) {
+      throw new Error(coverageValidationError);
+    }
+
+    const response = await fetch(`${API_URL}/quotes`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        divisionId: Number(selectedDivisionId),
+        patientId,
+        ...buildQuoteCoveragePayload(),
+        careType,
+        validityDays: 15,
+        discountTotal: Number(discountTotal || 0),
+        notes: notes || undefined,
+        createdByUserId,
+        items: [],
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(await getApiErrorMessage(response, 'No se pudo crear el borrador de la cotización.'));
+    }
+
+    const data = await safeParseJson<{ id: number }>(response);
+
+    if (!data?.id) {
+      throw new Error('La API no devolvió un borrador válido.');
+    }
+
+    setQuoteId(data.id);
+    return data.id;
+  }
+
+  async function fetchPackagesByProcedure(procedureId: number) {
+    const params = new URLSearchParams({
+      procedureId: String(procedureId),
+      divisionId: selectedDivisionId,
+    });
+
+    const response = await fetch(`${API_URL}/packages/by-procedure?${params.toString()}`);
+
+    if (!response.ok) {
+      throw new Error(await getApiErrorMessage(response, 'No se pudo verificar si existe un paquete para la prestación.'));
+    }
+
+    const data = await safeParseJson<PackageByProcedureResponse>(response);
+    return data ?? { hasPackage: false, packages: [] };
+  }
+
+  async function fetchPackageDetail(packageId: number) {
+    const response = await fetch(`${API_URL}/packages/${packageId}`);
+
+    if (!response.ok) {
+      throw new Error(await getApiErrorMessage(response, 'No se pudo cargar el detalle del paquete.'));
+    }
+
+    const data = await safeParseJson<PackageResponse>(response);
+
+    if (!data) {
+      throw new Error('No fue posible cargar el paquete seleccionado.');
+    }
+
+    return data;
+  }
+
+  async function evaluatePackage(packageId: number) {
+    const response = await fetch(`${API_URL}/packages/evaluate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ packageId }),
+    });
+
+    if (!response.ok) {
+      throw new Error(await getApiErrorMessage(response, 'No se pudo evaluar el paquete.'));
+    }
+
+    const data = await safeParseJson<PackageEvaluationResponse>(response);
+
+    if (!data) {
+      throw new Error('La evaluación del paquete no devolvió datos.');
+    }
+
+    return data;
+  }
+
+  async function createQuoteItemInBackend(payload: {
+    sourceType: 'PROCEDURE' | 'BASKET' | 'PACKAGE';
+    sourceId: number;
+    description: string;
+    quantity: number;
+    unitPrice: number;
+    type: 'PROCEDURE' | 'BASKET' | 'PACKAGE';
+    parentId?: number;
+  }) {
+    const draftQuoteId = await ensureDraftQuote();
+
+    const response = await fetch(`${API_URL}/quotes/${draftQuoteId}/items`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      throw new Error(await getApiErrorMessage(response, 'No se pudo agregar el ítem a la cotización.'));
+    }
+
+    const data = await safeParseJson<{
+      id: number;
+      quoteId: number;
+      parentId?: number | null;
+      sourceId: number;
+      sourceType: string;
+      description: string;
+      quantity: number;
+      unitPrice: number;
+      totalPrice: number;
+      type: string;
+    }>(response);
+
+    if (!data?.id) {
+      throw new Error('La API no devolvió el ítem creado.');
+    }
+
+    return data;
+  }
+
+  function mapQuotePackageItemsToBudgetItems(
+    quote: QuoteResponse,
+    packageQuoteItemId: number,
+  ): BudgetItem[] {
+    const itemsById = new Map<number, QuoteItemResponse>();
+
+    quote.items.forEach((item) => {
+      itemsById.set(item.id, item);
+    });
+
+    const packageRoot = itemsById.get(packageQuoteItemId);
+
+    if (!packageRoot) {
+      return [];
+    }
+
+    return quote.items
+      .filter((item) => item.parentId === packageQuoteItemId)
+      .map((item) => ({
+        localId: `QUOTEITEM-${item.id}`,
+        quoteItemId: item.id,
+        sourceId: item.sourceId,
+        sourceType: item.type === 'MEDICAL_FEE' ? 'MEDICAL_FEE' : 'PACKAGE',
+        parentGroupId: packageQuoteItemId,
+        parentGroupKey: `PACKAGE-${packageQuoteItemId}`,
+        parentGroupType: 'PACKAGE' as const,
+        parentGroupName: packageRoot.description,
+        lockedByPackage: true,
+        section:
+          item.type === 'MEDICAL_FEE'
+            ? 'PROCEDURE'
+            : resolveBillingSectionFromProcedure({
+                id: Number(item.sourceId),
+                divisionId: 0,
+                code: String(item.sourceId ?? '-'),
+                name: item.description,
+                category: null,
+                careType: 'BOTH',
+                active: true,
+              }),
+        code: item.type === 'MEDICAL_FEE' ? 'HONORARIO' : String(item.sourceId ?? '-'),
+        name: item.description,
+        quantity: Number(item.quantity),
+        basePrice: Number(item.unitPrice),
+        appliedFactor: 1,
+        unitPrice: Number(item.unitPrice),
+        totalPrice: Number(item.totalPrice),
+      }));
+  }
+
+  async function addPackageThroughBackend(
+    pkg: PackageResponse,
+    options?: {
+      applyCampaign?: boolean;
+      campaignId?: number;
+      padFactor?: number;
+    },
+  ) {
+    const draftQuoteId = await ensureDraftQuote();
+
+    const response = await fetch(`${API_URL}/quotes/${draftQuoteId}/packages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        packageId: pkg.id,
+        applyCampaign: options?.applyCampaign ?? false,
+        campaignId: options?.campaignId,
+        padFactor: options?.padFactor,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(await getApiErrorMessage(response, 'No se pudo agregar el paquete a la cotización.'));
+    }
+
+    const packageResult = await safeParseJson<{
+      packageQuoteItemId: number;
+      isPad: boolean;
+      goToSummary: boolean;
+      campaignApplied: boolean;
+    }>(response);
+
+    if (!packageResult?.packageQuoteItemId) {
+      throw new Error('La API no devolvió el paquete agregado.');
+    }
+
+    const quoteResponse = await fetch(`${API_URL}/quotes/${draftQuoteId}`);
+
+    if (!quoteResponse.ok) {
+      throw new Error(await getApiErrorMessage(quoteResponse, 'No se pudo sincronizar la cotización.'));
+    }
+
+    const quoteData = await safeParseJson<QuoteResponse>(quoteResponse);
+
+    if (!quoteData) {
+      throw new Error('No se pudo sincronizar el detalle de la cotización.');
+    }
+
+    const newPackageItems = mapQuotePackageItemsToBudgetItems(
+      quoteData,
+      packageResult.packageQuoteItemId,
+    );
+
+    setBudgetItems((prev) => applySectionBillingRule([...prev, ...newPackageItems]));
+
+    if (packageResult.goToSummary) {
+      setCurrentStep(3);
+    }
+
+    return packageResult;
+  }
+
   async function handleSearchProcedures() {
     if (!selectedDivisionId) {
       setAlert({
         type: 'warning',
         message: 'Seleccione una división antes de buscar prestaciones.',
+      });
+      return;
+    }
+
+    const coverageValidationError = validateCoverageSelection();
+    if (coverageValidationError) {
+      setAlert({
+        type: 'warning',
+        message: coverageValidationError,
       });
       return;
     }
@@ -874,6 +1478,14 @@ export default function NewQuotationPage() {
   }
 
   async function handleSearchPackages() {
+    if (careType !== 'SURGICAL') {
+      setAlert({
+        type: 'warning',
+        message: 'Los paquetes solo están disponibles en presupuestos quirúrgicos.',
+      });
+      return;
+    }
+
     if (!selectedDivisionId) {
       setAlert({
         type: 'warning',
@@ -898,6 +1510,7 @@ export default function NewQuotationPage() {
         divisionId: selectedDivisionId,
         search: packageSearch.trim(),
         active: 'true',
+        careType: 'SURGICAL',
       });
 
       const response = await fetch(`${API_URL}/packages?${params.toString()}`);
@@ -934,44 +1547,50 @@ export default function NewQuotationPage() {
       return;
     }
 
-    if (!selectedIsapreId || !selectedPlanId) {
-      setAlert({
-        type: 'warning',
-        message: 'Seleccione isapre y plan antes de agregar una prestación.',
-      });
-      return;
-    }
-
     try {
       setAddingProcedureId(procedure.id);
       setAlert(null);
 
+      if (careType === 'SURGICAL') {
+        const packageData = await fetchPackagesByProcedure(procedure.id);
+
+        if (packageData.hasPackage && packageData.packages.length > 0) {
+          setPendingPackageSuggestion({
+            procedure,
+            packages: packageData.packages,
+          });
+          return;
+        }
+      }
+
       const basePrice = await resolveProcedureAgreementPrice(procedure.id);
 
-      setBudgetItems((prev) => {
-        const existing = prev.find(
-          (item) =>
-            item.section === 'PROCEDURE' &&
-            Number(item.sourceId) === procedure.id &&
-            item.sourceType === 'PROCEDURE' &&
-            !item.parentGroupType,
-        );
+      const createdItem = await createQuoteItemInBackend({
+        sourceType: 'PROCEDURE',
+        sourceId: procedure.id,
+        description: procedure.name,
+        quantity: 1,
+        unitPrice: basePrice,
+        type: 'PROCEDURE',
+      });
 
+      setBudgetItems((prev) => {
         const newItem = buildBudgetItem({
           procedure,
-          quantity: 1,
-          basePrice,
+          quantity: Number(createdItem.quantity),
+          basePrice: Number(createdItem.unitPrice),
           sourceType: 'PROCEDURE',
           lockedByPackage: false,
         });
 
-        const next: BudgetItem[] = existing
-          ? prev.map((item) =>
-              item.localId === existing.localId
-                ? { ...item, quantity: item.quantity + 1 }
-                : item,
-            )
-          : [...prev, newItem];
+        const next: BudgetItem[] = [
+          ...prev,
+          {
+            ...newItem,
+            localId: `QUOTEITEM-${createdItem.id}`,
+            quoteItemId: createdItem.id,
+          },
+        ];
 
         return applySectionBillingRule(next);
       });
@@ -991,19 +1610,112 @@ export default function NewQuotationPage() {
     }
   }
 
+  async function handleProceedWithoutPackage() {
+    if (!pendingPackageSuggestion) {
+      return;
+    }
+
+    try {
+      const basePrice = await resolveProcedureAgreementPrice(pendingPackageSuggestion.procedure.id);
+
+      const createdItem = await createQuoteItemInBackend({
+        sourceType: 'PROCEDURE',
+        sourceId: pendingPackageSuggestion.procedure.id,
+        description: pendingPackageSuggestion.procedure.name,
+        quantity: 1,
+        unitPrice: basePrice,
+        type: 'PROCEDURE',
+      });
+
+      setBudgetItems((prev) => {
+        const newItem = buildBudgetItem({
+          procedure: pendingPackageSuggestion.procedure,
+          quantity: Number(createdItem.quantity),
+          basePrice: Number(createdItem.unitPrice),
+          sourceType: 'PROCEDURE',
+          lockedByPackage: false,
+        });
+
+        const next: BudgetItem[] = [
+          ...prev,
+          {
+            ...newItem,
+            localId: `QUOTEITEM-${createdItem.id}`,
+            quoteItemId: createdItem.id,
+          },
+        ];
+
+        return applySectionBillingRule(next);
+      });
+
+      setAlert({
+        type: 'success',
+        message: `Prestación "${pendingPackageSuggestion.procedure.name}" agregada correctamente al presupuesto.`,
+      });
+    } catch (error) {
+      console.error(error);
+      setAlert({
+        type: 'error',
+        message: error instanceof Error ? error.message : 'No se pudo agregar la prestación.',
+      });
+    } finally {
+      setPendingPackageSuggestion(null);
+    }
+  }
+
+  async function handleChooseSuggestedPackage(pkg: PackageSuggestionResult) {
+    if (careType !== 'SURGICAL') {
+      setAlert({
+        type: 'warning',
+        message: 'Los paquetes solo están disponibles en presupuestos quirúrgicos.',
+      });
+      return;
+    }
+
+    try {
+      setProcessingPackageFlow(true);
+      setAddingPackageId(pkg.id);
+
+      const evaluation = await evaluatePackage(pkg.id);
+      const packageDetail = await fetchPackageDetail(pkg.id);
+      setPendingPackageSuggestion(null);
+
+      if (evaluation.isPad) {
+        setPendingPadSelection({ pkg: packageDetail });
+        return;
+      }
+
+      if (evaluation.requiresCampaignSelection && evaluation.campaign) {
+        setPendingCampaignSelection({
+          pkg: packageDetail,
+          evaluation,
+        });
+        return;
+      }
+
+      await addPackageThroughBackend(packageDetail);
+
+      setAlert({
+        type: 'success',
+        message: `Paquete "${packageDetail.name}" agregado correctamente al presupuesto.`,
+      });
+    } catch (error) {
+      console.error(error);
+      setAlert({
+        type: 'error',
+        message: error instanceof Error ? error.message : 'No se pudo procesar el paquete sugerido.',
+      });
+    } finally {
+      setProcessingPackageFlow(false);
+      setAddingPackageId(null);
+    }
+  }
+
   async function handleAddBasket(basket: BasketResponse) {
     if (!selectedDivisionId) {
       setAlert({
         type: 'warning',
         message: 'Seleccione una división antes de agregar canastas.',
-      });
-      return;
-    }
-
-    if (!selectedIsapreId || !selectedPlanId) {
-      setAlert({
-        type: 'warning',
-        message: 'Seleccione isapre y plan antes de agregar una canasta.',
       });
       return;
     }
@@ -1020,7 +1732,16 @@ export default function NewQuotationPage() {
       setAddingBasketId(basket.id);
       setAlert(null);
 
-      const groupKey = `BASKET-${basket.id}-${Date.now()}`;
+      const createdBasketParent = await createQuoteItemInBackend({
+        sourceType: 'BASKET',
+        sourceId: basket.id,
+        description: basket.name,
+        quantity: 1,
+        unitPrice: 0,
+        type: 'BASKET',
+      });
+
+      const groupKey = `BASKET-${createdBasketParent.id}`;
       const newItems: BudgetItem[] = [];
 
       for (const basketItem of basket.items) {
@@ -1032,19 +1753,31 @@ export default function NewQuotationPage() {
 
         const basePrice = await resolveProcedureAgreementPrice(procedure.id);
 
-        newItems.push(
-          buildBudgetItem({
+        const createdChildItem = await createQuoteItemInBackend({
+          sourceType: 'PROCEDURE',
+          sourceId: procedure.id,
+          description: procedure.name,
+          quantity: basketItem.quantity,
+          unitPrice: basePrice,
+          type: 'PROCEDURE',
+          parentId: createdBasketParent.id,
+        });
+
+        newItems.push({
+          ...buildBudgetItem({
             procedure,
             quantity: basketItem.quantity,
             basePrice,
             sourceType: 'BASKET',
-            parentGroupId: basket.id,
+            parentGroupId: createdBasketParent.id,
             parentGroupKey: groupKey,
             parentGroupType: 'BASKET',
             parentGroupName: basket.name,
             lockedByPackage: false,
           }),
-        );
+          localId: `QUOTEITEM-${createdChildItem.id}`,
+          quoteItemId: createdChildItem.id,
+        });
       }
 
       setBudgetItems((prev) => applySectionBillingRule([...prev, ...newItems]));
@@ -1064,73 +1797,35 @@ export default function NewQuotationPage() {
     }
   }
 
-  async function handleAddPackage(pkg: PackageResponse) {
-    if (!selectedDivisionId) {
+  async function handleBeginPackageFlow(pkg: PackageResponse) {
+    if (careType !== 'SURGICAL') {
       setAlert({
         type: 'warning',
-        message: 'Seleccione una división antes de agregar paquetes.',
-      });
-      return;
-    }
-
-    if (!selectedIsapreId || !selectedPlanId) {
-      setAlert({
-        type: 'warning',
-        message: 'Seleccione isapre y plan antes de agregar un paquete.',
-      });
-      return;
-    }
-
-    if (!pkg.items.length) {
-      setAlert({
-        type: 'warning',
-        message: 'El paquete seleccionado no tiene prestaciones configuradas.',
+        message: 'Los paquetes solo están disponibles en presupuestos quirúrgicos.',
       });
       return;
     }
 
     try {
+      setProcessingPackageFlow(true);
       setAddingPackageId(pkg.id);
-      setAlert(null);
 
-      const groupKey = `PACKAGE-${pkg.id}-${Date.now()}`;
-      const newItems: BudgetItem[] = [];
+      const evaluation = await evaluatePackage(pkg.id);
 
-      for (const packageItem of pkg.items) {
-        const procedure = packageItem.procedure;
-
-        if (!procedure) {
-          throw new Error(`El paquete "${pkg.name}" tiene un ítem sin prestación asociada.`);
-        }
-
-        let basePrice = 0;
-
-        if (packageItem.priceMode === 'FIXED_PRICE') {
-          if (packageItem.fixedPrice === null || packageItem.fixedPrice === undefined || packageItem.fixedPrice === '') {
-            throw new Error(`El paquete "${pkg.name}" contiene un ítem FIXED_PRICE sin precio fijo.`);
-          }
-
-          basePrice = Number(packageItem.fixedPrice);
-        } else {
-          basePrice = await resolveProcedureAgreementPrice(procedure.id);
-        }
-
-        newItems.push(
-          buildBudgetItem({
-            procedure,
-            quantity: packageItem.quantity,
-            basePrice,
-            sourceType: 'PACKAGE',
-            parentGroupId: pkg.id,
-            parentGroupKey: groupKey,
-            parentGroupType: 'PACKAGE',
-            parentGroupName: pkg.name,
-            lockedByPackage: true,
-          }),
-        );
+      if (evaluation.isPad) {
+        setPendingPadSelection({ pkg });
+        return;
       }
 
-      setBudgetItems((prev) => applySectionBillingRule([...prev, ...newItems]));
+      if (evaluation.requiresCampaignSelection && evaluation.campaign) {
+        setPendingCampaignSelection({
+          pkg,
+          evaluation,
+        });
+        return;
+      }
+
+      await addPackageThroughBackend(pkg);
 
       setAlert({
         type: 'success',
@@ -1143,11 +1838,143 @@ export default function NewQuotationPage() {
         message: error instanceof Error ? error.message : 'Ocurrió un error al agregar el paquete.',
       });
     } finally {
+      setProcessingPackageFlow(false);
       setAddingPackageId(null);
     }
   }
 
-  function handleQuantityChange(localId: string, quantity: number) {
+  async function handleAcceptCampaign() {
+    if (!pendingCampaignSelection?.evaluation.campaign) {
+      return;
+    }
+
+    try {
+      setProcessingPackageFlow(true);
+
+      await addPackageThroughBackend(pendingCampaignSelection.pkg, {
+        applyCampaign: true,
+        campaignId: pendingCampaignSelection.evaluation.campaign.id,
+      });
+
+      setAlert({
+        type: 'success',
+        message: `Paquete "${pendingCampaignSelection.pkg.name}" agregado con campaña aplicada.`,
+      });
+
+      setPendingCampaignSelection(null);
+    } catch (error) {
+      console.error(error);
+      setAlert({
+        type: 'error',
+        message: error instanceof Error ? error.message : 'No se pudo aplicar la campaña.',
+      });
+    } finally {
+      setProcessingPackageFlow(false);
+    }
+  }
+
+  async function handleRejectCampaign() {
+    if (!pendingCampaignSelection) {
+      return;
+    }
+
+    try {
+      setProcessingPackageFlow(true);
+
+      await addPackageThroughBackend(pendingCampaignSelection.pkg);
+
+      setAlert({
+        type: 'success',
+        message: `Paquete "${pendingCampaignSelection.pkg.name}" agregado sin campaña.`,
+      });
+
+      setPendingCampaignSelection(null);
+    } catch (error) {
+      console.error(error);
+      setAlert({
+        type: 'error',
+        message: error instanceof Error ? error.message : 'No se pudo agregar el paquete.',
+      });
+    } finally {
+      setProcessingPackageFlow(false);
+    }
+  }
+
+  async function handleSelectPadFactor(padFactor: number) {
+    if (!pendingPadSelection) {
+      return;
+    }
+
+    try {
+      setProcessingPackageFlow(true);
+
+      await addPackageThroughBackend(pendingPadSelection.pkg, {
+        padFactor,
+      });
+
+      setAlert({
+        type: 'success',
+        message: `Paquete PAD "${pendingPadSelection.pkg.name}" agregado correctamente.`,
+      });
+
+      setPendingPadSelection(null);
+    } catch (error) {
+      console.error(error);
+      setAlert({
+        type: 'error',
+        message: error instanceof Error ? error.message : 'No se pudo agregar el paquete PAD.',
+      });
+    } finally {
+      setProcessingPackageFlow(false);
+    }
+  }
+
+  async function updateQuoteItemQuantityInBackend(itemId: number, quantity: number) {
+    const draftQuoteId = await ensureDraftQuote();
+
+    const response = await fetch(`${API_URL}/quotes/${draftQuoteId}/items/${itemId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ quantity }),
+    });
+
+    if (!response.ok) {
+      throw new Error(await getApiErrorMessage(response, 'No se pudo actualizar la cantidad del ítem.'));
+    }
+
+    return safeParseJson<{
+      id: number;
+      quantity: number;
+      unitPrice: number;
+      totalPrice: number;
+    }>(response);
+  }
+
+  async function deleteQuoteItemInBackend(itemId: number) {
+    const draftQuoteId = await ensureDraftQuote();
+
+    const response = await fetch(`${API_URL}/quotes/${draftQuoteId}/items/${itemId}`, {
+      method: 'DELETE',
+    });
+
+    if (!response.ok) {
+      throw new Error(await getApiErrorMessage(response, 'No se pudo eliminar el ítem de la cotización.'));
+    }
+  }
+
+  async function deleteQuoteGroupInBackend(groupItemId: number) {
+    const draftQuoteId = await ensureDraftQuote();
+
+    const response = await fetch(`${API_URL}/quotes/${draftQuoteId}/groups/${groupItemId}`, {
+      method: 'DELETE',
+    });
+
+    if (!response.ok) {
+      throw new Error(await getApiErrorMessage(response, 'No se pudo eliminar el grupo de la cotización.'));
+    }
+  }
+
+  async function handleQuantityChange(localId: string, quantity: number) {
     if (quantity < 1) {
       setAlert({
         type: 'warning',
@@ -1156,143 +1983,208 @@ export default function NewQuotationPage() {
       return;
     }
 
-    setBudgetItems((prev) => {
-      const target = prev.find((item) => item.localId === localId);
+    try {
+      const target = budgetItems.find((item) => item.localId === localId);
 
       if (!target || target.lockedByPackage) {
-        return prev;
+        return;
       }
 
-      const next = prev.map((item) => (item.localId === localId ? { ...item, quantity } : item));
-      return applySectionBillingRule(next);
-    });
+      if (target.quoteItemId) {
+        await updateQuoteItemQuantityInBackend(target.quoteItemId, quantity);
+      }
+
+      setBudgetItems((prev) => {
+        const next = prev.map((item) =>
+          item.localId === localId ? { ...item, quantity } : item,
+        );
+        return applySectionBillingRule(next);
+      });
+    } catch (error) {
+      console.error(error);
+      setAlert({
+        type: 'error',
+        message: error instanceof Error ? error.message : 'No se pudo actualizar la cantidad.',
+      });
+    }
   }
 
-  function handleRemoveItem(localId: string) {
-    setBudgetItems((prev) => {
-      const target = prev.find((item) => item.localId === localId);
+  async function handleRemoveItem(localId: string) {
+    try {
+      const target = budgetItems.find((item) => item.localId === localId);
 
       if (!target || target.lockedByPackage) {
-        return prev;
+        return;
       }
 
-      const next = prev.filter((item) => item.localId !== localId);
-      return applySectionBillingRule(next);
-    });
+      if (target.quoteItemId) {
+        await deleteQuoteItemInBackend(target.quoteItemId);
+      }
 
-    setAlert({
-      type: 'info',
-      message: 'El ítem fue eliminado del presupuesto.',
-    });
+      setBudgetItems((prev) => {
+        const next = prev.filter((item) => item.localId !== localId);
+        return applySectionBillingRule(next);
+      });
+
+      setAlert({
+        type: 'info',
+        message: 'El ítem fue eliminado del presupuesto.',
+      });
+    } catch (error) {
+      console.error(error);
+      setAlert({
+        type: 'error',
+        message: error instanceof Error ? error.message : 'No se pudo eliminar el ítem.',
+      });
+    }
   }
 
-  function handleRemoveGroup(groupKey: string, groupType: 'BASKET' | 'PACKAGE') {
-    setBudgetItems((prev) => {
-      const next = prev.filter((item) => item.parentGroupKey !== groupKey);
-      return applySectionBillingRule(next);
-    });
+  async function handleRemoveGroup(groupKey: string, groupType: 'BASKET' | 'PACKAGE') {
+    try {
+      const groupRoot = budgetItems.find(
+        (item) => item.parentGroupKey === groupKey && item.parentGroupId,
+      );
 
-    setAlert({
-      type: 'info',
-      message:
-        groupType === 'BASKET'
-          ? 'La canasta fue eliminada del presupuesto.'
-          : 'El paquete fue eliminado del presupuesto.',
-    });
+      if (groupRoot?.parentGroupId) {
+        await deleteQuoteGroupInBackend(groupRoot.parentGroupId);
+      }
+
+      setBudgetItems((prev) => {
+        const next = prev.filter((item) => item.parentGroupKey !== groupKey);
+        return applySectionBillingRule(next);
+      });
+
+      setAlert({
+        type: 'info',
+        message:
+          groupType === 'BASKET'
+            ? 'La canasta fue eliminada del presupuesto.'
+            : 'El paquete fue eliminado del presupuesto.',
+      });
+    } catch (error) {
+      console.error(error);
+      setAlert({
+        type: 'error',
+        message: error instanceof Error ? error.message : 'No se pudo eliminar el grupo.',
+      });
+    }
   }
 
   async function handleGeneratePdf() {
-  if (!careType) {
-    setAlert({
-      type: 'warning',
-      message: 'Debe seleccionar el tipo de presupuesto antes de generar el PDF.',
-    });
-    return;
-  }
-
-  if (!budgetItems.length) {
-    setAlert({
-      type: 'warning',
-      message: 'No hay ítems en el presupuesto para generar el PDF.',
-    });
-    return;
-  }
-
-  try {
-    setGeneratingPdf(true);
-    setAlert(null);
-
-    const payload = {
-      quotationNumber: `BORRADOR-${Date.now()}`,
-      divisionName: selectedDivisionName,
-      careType,
-      patient: {
-        rut: rut || '-',
-        fullName: [firstName, lastName].filter(Boolean).join(' ') || '-',
-        email: email || undefined,
-        phone: phone || undefined,
-      },
-      coverage: {
-        isapreName: selectedIsapreName !== '-' ? selectedIsapreName : undefined,
-        planName: selectedPlanName !== '-' ? selectedPlanName : undefined,
-      },
-      items: budgetItems.map((item) => ({
-        section: item.section,
-        code: item.code,
-        name: item.name,
-        quantity: item.quantity,
-        appliedFactor: item.appliedFactor,
-        unitPrice: item.unitPrice,
-        totalPrice: item.totalPrice,
-      })),
-      subtotal,
-      discountTotal: Number(discountTotal || 0),
-      total,
-      notes: notes || undefined,
-      generatedAt: new Date().toLocaleString('es-CL'),
-    };
-
-    console.log('Payload enviado al PDF:', payload);
-
-    const response = await fetch(`${API_URL}/pdf/budget`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('PDF status:', response.status);
-      console.error('PDF error body:', errorText);
-      console.error('PDF payload:', payload);
-      throw new Error(`No se pudo generar el PDF. Código: ${response.status}`);
+    if (!careType) {
+      setAlert({
+        type: 'warning',
+        message: 'Debe seleccionar el tipo de presupuesto antes de generar el PDF.',
+      });
+      return;
     }
 
-    const blob = await response.blob();
-    const url = window.URL.createObjectURL(blob);
-    const link = document.createElement('a');
+    if (!budgetItems.length) {
+      setAlert({
+        type: 'warning',
+        message: 'No hay ítems en el presupuesto para generar el PDF.',
+      });
+      return;
+    }
 
-    link.href = url;
-    link.download = `presupuesto_${Date.now()}.pdf`;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    window.URL.revokeObjectURL(url);
+    try {
+      setGeneratingPdf(true);
+      setAlert(null);
 
-    setAlert({
-      type: 'success',
-      message: 'El PDF fue generado y descargado correctamente.',
-    });
-  } catch (error) {
-    console.error(error);
-    setAlert({
-      type: 'error',
-      message: 'Ocurrió un error al generar el PDF del presupuesto.',
-    });
-  } finally {
-    setGeneratingPdf(false);
+      const patientFullName = [firstName, lastName, middleName]
+        .filter((value) => value.trim())
+        .join(' ');
+
+      const pdfItems = budgetItems.map((item) => ({
+        section: item.section,
+        code: item.code || '-',
+        name: item.name || '-',
+        quantity: Number(item.quantity || 0),
+        appliedFactor: Number(item.appliedFactor || 1),
+        unitPrice: Number(item.unitPrice || 0),
+        totalPrice: Number(item.totalPrice || 0),
+      }));
+
+      const payload = {
+        quotationNumber: quoteId ? `COT-${quoteId}` : `BORRADOR-${Date.now()}`,
+        divisionName: selectedDivisionName || '-',
+        careType,
+        patient: {
+          rut: rut || '-',
+          fullName: patientFullName || '-',
+          email: email || '-',
+          phone: phone || '-',
+        },
+        coverage: {
+          type: selectedCoverageType,
+          label: selectedCoverageName,
+          coverageName: selectedCoverageName,
+          detailLabel: coverageDetailLabel,
+          isapreName:
+            selectedCoverageType === 'ISAPRE_PLAN' && selectedIsapreName !== '-'
+              ? selectedIsapreName
+              : undefined,
+          planName:
+            selectedCoverageType === 'ISAPRE_PLAN' && selectedPlanName !== '-'
+              ? selectedPlanName
+              : undefined,
+          fonasaCode:
+            selectedCoverageType === 'FONASA' ? fonasaCode.trim() || undefined : undefined,
+          payerLabel:
+            selectedCoverageType === 'PARTICULAR' || selectedCoverageType === 'OTHER'
+              ? payerLabel.trim() || undefined
+              : undefined,
+        },
+        items: pdfItems,
+        subtotal: Number(subtotal || 0),
+        discountTotal: Number(discountTotal || 0),
+        total: Number(total || 0),
+        notes: notes || '',
+        generatedAt: new Date().toLocaleString('es-CL'),
+      };
+
+      console.log('PDF payload JSON:', JSON.stringify(payload, null, 2));
+
+      const response = await fetch(`${API_URL}/pdf/budget`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('PDF status:', response.status);
+        console.error('PDF error body:', errorText);
+        console.error('PDF payload:', payload);
+        console.error('PDF payload JSON:', JSON.stringify(payload, null, 2));
+        throw new Error(`No se pudo generar el PDF. Código: ${response.status}`);
+      }
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+
+      link.href = url;
+      link.download = `presupuesto_${Date.now()}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+
+      setAlert({
+        type: 'success',
+        message: 'El PDF fue generado y descargado correctamente.',
+      });
+    } catch (error) {
+      console.error(error);
+      setAlert({
+        type: 'error',
+        message: 'Ocurrió un error al generar el PDF del presupuesto.',
+      });
+    } finally {
+      setGeneratingPdf(false);
+    }
   }
-}
 
   async function handlePrimaryAction(event?: React.MouseEvent<HTMLButtonElement>) {
     event?.preventDefault();
@@ -1324,23 +2216,28 @@ export default function NewQuotationPage() {
   }
 
   return (
-    <main className="min-h-screen bg-gradient-to-br from-sky-50 via-white to-cyan-50">
-      <div className="mx-auto max-w-7xl px-4 py-6 md:px-6 md:py-8">
+    <main className="min-h-screen bg-gradient-to-br from-[var(--brand-primary-soft)] via-white to-[var(--brand-secondary-soft)]">
+      <div className="mx-auto max-w-7xl px-4 py-4 md:px-6 md:py-5">
+        <HeroHeader careType={careType} currentStep={currentStep} />
 
-        <HeroHeader careType={careType} currentStep={currentStep} apiUrl={API_URL} />
-
-        <section className="mb-6 grid gap-3 md:grid-cols-4">
+        <section className="relative z-10 mt-4 mb-5 grid gap-3 md:mt-5 md:grid-cols-4">
           <StepCard number="01" label="Tipo" active={currentStep === 0} done={currentStep > 0} />
           <StepCard number="02" label="Paciente" active={currentStep === 1} done={currentStep > 1} />
           <StepCard number="03" label="Presupuesto" active={currentStep === 2} done={currentStep > 2} />
           <StepCard number="04" label="Resumen" active={currentStep === 3} done={false} />
         </section>
 
-        <section className="overflow-hidden rounded-[28px] border border-sky-100 bg-white shadow-[0_15px_50px_-20px_rgba(15,76,129,0.35)]">
-          <div className="border-b border-sky-100 bg-gradient-to-r from-[#0F4C81] via-[#1769aa] to-[#2C8ED6] px-6 py-5 text-white">
+        <section className="overflow-hidden rounded-[28px] border border-[var(--brand-secondary-soft)] bg-white shadow-[0_15px_50px_-20px_rgba(15,76,129,0.28)]">
+          <div
+            className="border-b border-[var(--brand-secondary-soft)] px-6 py-4 text-white"
+            style={{
+              background:
+                'linear-gradient(90deg, var(--brand-primary), var(--brand-secondary))',
+            }}
+          >
             <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
               <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.24em] text-sky-100/90">
+                <p className="text-xs font-semibold uppercase tracking-[0.24em] text-white/80">
                   Flujo de emisión
                 </p>
                 <h2 className="mt-1 text-2xl font-bold">{stepTitle}</h2>
@@ -1351,8 +2248,8 @@ export default function NewQuotationPage() {
                   className={[
                     'inline-flex w-fit items-center rounded-full px-4 py-2 text-xs font-bold uppercase tracking-wide',
                     careType === 'AMBULATORY'
-                      ? 'bg-cyan-100 text-cyan-800'
-                      : 'bg-rose-100 text-rose-700',
+                      ? 'bg-white/90 text-slate-800'
+                      : 'bg-white/90 text-slate-800',
                   ].join(' ')}
                 >
                   {careType === 'AMBULATORY' ? 'Ambulatorio' : 'Quirúrgico'}
@@ -1363,31 +2260,24 @@ export default function NewQuotationPage() {
 
           <div className="p-5 md:p-7">
             {currentStep === 0 && (
-              <InitialCareTypeStep careType={careType} onSelect={selectCareType} />
+              <InitialCareTypeStep
+                careType={careType}
+                allowedCareTypes={allowedCareTypes}
+                onSelect={selectCareType}
+              />
             )}
 
             {currentStep === 1 && (
               <SectionCard
-                title="Identificación del paciente"
-                subtitle="Busque al paciente por RUT y complete los datos si aún no existe en la división seleccionada."
+                title="Identificación del paciente y cobertura"
+                subtitle={`Busque al paciente por RUT y complete los datos si aún no existe en la división ${selectedDivisionName}. La cobertura se carga desde el mismo catálogo que usa el mantenedor de precios.`}
               >
-                <div className="grid items-end gap-4 md:grid-cols-3">
-                  <Field label="División">
-                    <select
-                      value={selectedDivisionId}
-                      onChange={(e) => setSelectedDivisionId(e.target.value)}
-                      className="input-clinical"
-                      disabled={loadingDivisions}
-                    >
-                      <option value="">Seleccione división</option>
-                      {divisions.map((d) => (
-                        <option key={d.id} value={d.id}>
-                          {d.name}
-                        </option>
-                      ))}
-                    </select>
-                  </Field>
+                <div className="mb-4 rounded-2xl border border-[var(--brand-secondary-soft)] bg-[var(--brand-primary-soft)] px-4 py-3 text-sm text-slate-700">
+                  <span className="font-semibold text-[var(--brand-primary)]">División asignada:</span>{' '}
+                  {selectedDivisionName}
+                </div>
 
+                <div className="grid items-end gap-4 md:grid-cols-3">
                   <Field label="RUT del paciente">
                     <input
                       type="text"
@@ -1399,17 +2289,19 @@ export default function NewQuotationPage() {
                     />
                   </Field>
 
-                  <button
-                    type="button"
-                    onClick={handleSearchPatient}
-                    disabled={loadingPatient}
-                    className="btn-health-primary h-[46px]"
-                  >
-                    {loadingPatient ? 'Buscando...' : 'Verificar RUT'}
-                  </button>
+                  <div className="md:col-span-2">
+                    <button
+                      type="button"
+                      onClick={handleSearchPatient}
+                      disabled={loadingPatient || !selectedDivisionId}
+                      className="btn-health-primary h-[46px]"
+                    >
+                      {loadingPatient ? 'Buscando...' : 'Verificar RUT'}
+                    </button>
+                  </div>
                 </div>
 
-                <div className="mt-6 grid gap-4 border-t border-sky-100 pt-6 md:grid-cols-2">
+                <div className="mt-6 grid gap-4 border-t border-[var(--brand-secondary-soft)] pt-6 md:grid-cols-2">
                   <Field label="Nombres">
                     <input
                       type="text"
@@ -1464,19 +2356,114 @@ export default function NewQuotationPage() {
                     />
                   </Field>
                 </div>
+
+                <div className="mt-6 border-t border-[var(--brand-secondary-soft)] pt-6">
+                  <div className="mb-4">
+                    <h4 className="text-lg font-semibold text-[var(--brand-primary)]">Cobertura</h4>
+                    <p className="mt-1 text-sm text-slate-600">
+                      Seleccione la cobertura desde el catálogo centralizado antes de continuar.
+                    </p>
+                  </div>
+
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <Field label="Tipo de cobertura">
+                      <select
+                        value={selectedCoverageType}
+                        onChange={(e) =>
+                          handleCoverageTypeSelection(e.target.value as CoverageType)
+                        }
+                        className="input-clinical"
+                        disabled={loadingCoverageCatalog || !coverageCatalog.length}
+                      >
+                        {coverageCatalog
+                          .filter((item) => item.enabled)
+                          .map((item) => (
+                            <option key={item.type} value={item.type}>
+                              {item.label}
+                            </option>
+                          ))}
+                      </select>
+                    </Field>
+
+                    <Field label="Estado del catálogo">
+                      <div className="input-clinical flex items-center bg-slate-50 text-slate-600">
+                        {loadingCoverageCatalog
+                          ? 'Cargando coberturas...'
+                          : currentCoverageConfig
+                          ? 'Cobertura disponible'
+                          : 'Sin coberturas configuradas'}
+                      </div>
+                    </Field>
+
+                    {currentCoverageConfig?.requiresIsapre && (
+                      <Field label="Isapre">
+                        <select
+                          value={selectedIsapreId}
+                          onChange={(e) => {
+                            setSelectedIsapreId(e.target.value);
+                            setSelectedPlanId('');
+                          }}
+                          className="input-clinical"
+                          disabled={loadingIsapres || !selectedDivisionId}
+                        >
+                          <option value="">Seleccione isapre</option>
+                          {isapres.map((item) => (
+                            <option key={item.id} value={item.id}>
+                              {item.name}
+                            </option>
+                          ))}
+                        </select>
+                      </Field>
+                    )}
+
+                    {currentCoverageConfig?.requiresPlan && (
+                      <Field label="Plan">
+                        <select
+                          value={selectedPlanId}
+                          onChange={(e) => setSelectedPlanId(e.target.value)}
+                          className="input-clinical"
+                          disabled={loadingPlans || !selectedIsapreId}
+                        >
+                          <option value="">Seleccione plan</option>
+                          {plans.map((plan) => (
+                            <option key={plan.id} value={plan.id}>
+                              {plan.name}
+                            </option>
+                          ))}
+                        </select>
+                      </Field>
+                    )}
+
+                    {currentCoverageConfig?.requiresFonasaCode && (
+                      <Field label="Código Fonasa">
+                        <input
+                          type="text"
+                          value={fonasaCode}
+                          onChange={(e) => setFonasaCode(e.target.value)}
+                          className="input-clinical"
+                          placeholder="Ingrese código Fonasa"
+                        />
+                      </Field>
+                    )}
+
+                    {currentCoverageConfig?.requiresPayerLabel && (
+                      <Field label="Pagador">
+                        <input
+                          type="text"
+                          value={payerLabel}
+                          onChange={(e) => setPayerLabel(e.target.value)}
+                          className="input-clinical"
+                          placeholder="Ingrese pagador"
+                        />
+                      </Field>
+                    )}
+                  </div>
+                </div>
               </SectionCard>
             )}
 
             {currentStep === 2 && (
               <BudgetStep
-                isapres={isapres}
-                loadingIsapres={loadingIsapres}
-                selectedIsapreId={selectedIsapreId}
-                setSelectedIsapreId={setSelectedIsapreId}
-                plans={plans}
-                loadingPlans={loadingPlans}
-                selectedPlanId={selectedPlanId}
-                setSelectedPlanId={setSelectedPlanId}
                 procedureSearch={procedureSearch}
                 setProcedureSearch={setProcedureSearch}
                 loadingProcedures={loadingProcedures}
@@ -1496,7 +2483,7 @@ export default function NewQuotationPage() {
                 loadingPackages={loadingPackages}
                 packageResults={packageResults}
                 handleSearchPackages={handleSearchPackages}
-                handleAddPackage={handleAddPackage}
+                handleAddPackage={handleBeginPackageFlow}
                 addingPackageId={addingPackageId}
                 budgetItems={budgetItems}
                 addedGroups={addedGroups}
@@ -1510,6 +2497,11 @@ export default function NewQuotationPage() {
                 total={total}
                 notes={notes}
                 setNotes={setNotes}
+                careType={careType}
+                showBasketFinder={showBasketFinder}
+                setShowBasketFinder={setShowBasketFinder}
+                showPackageFinder={showPackageFinder}
+                setShowPackageFinder={setShowPackageFinder}
               />
             )}
 
@@ -1521,8 +2513,8 @@ export default function NewQuotationPage() {
                 email={email}
                 phone={phone}
                 careType={careType}
-                isapreName={selectedIsapreName}
-                planName={selectedPlanName}
+                coverageLabel={selectedCoverageName}
+                coverageDetailLabel={coverageDetailLabel}
                 budgetItems={budgetItems}
                 subtotal={subtotal}
                 discountTotal={Number(discountTotal || 0)}
@@ -1532,7 +2524,7 @@ export default function NewQuotationPage() {
             )}
 
             {currentStep > 0 && (
-              <div className="mt-8 flex items-center justify-between border-t border-sky-100 pt-6">
+              <div className="mt-8 flex items-center justify-between border-t border-[var(--brand-secondary-soft)] pt-6">
                 <button onClick={goToPrevStep} className="btn-health-secondary">
                   Volver
                 </button>
@@ -1560,6 +2552,35 @@ export default function NewQuotationPage() {
         </section>
       </div>
 
+      <PackageSuggestionModal
+        open={!!pendingPackageSuggestion}
+        procedureName={pendingPackageSuggestion?.procedure.name ?? ''}
+        packages={pendingPackageSuggestion?.packages ?? []}
+        loading={processingPackageFlow}
+        onClose={() => setPendingPackageSuggestion(null)}
+        onContinueWithoutPackage={handleProceedWithoutPackage}
+        onSelectPackage={handleChooseSuggestedPackage}
+      />
+
+      <CampaignSelectionModal
+        open={!!pendingCampaignSelection}
+        packageName={pendingCampaignSelection?.pkg.name ?? ''}
+        campaignName={pendingCampaignSelection?.evaluation.campaign?.name ?? ''}
+        discountPercentage={pendingCampaignSelection?.evaluation.campaign?.discountPercentage ?? 0}
+        loading={processingPackageFlow}
+        onClose={() => setPendingCampaignSelection(null)}
+        onAccept={handleAcceptCampaign}
+        onReject={handleRejectCampaign}
+      />
+
+      <PadSelectionModal
+        open={!!pendingPadSelection}
+        packageName={pendingPadSelection?.pkg.name ?? ''}
+        loading={processingPackageFlow}
+        onClose={() => setPendingPadSelection(null)}
+        onSelectFactor={handleSelectPadFactor}
+      />
+
       <FloatingToast alert={alert} onClose={() => setAlert(null)} />
     </main>
   );
@@ -1568,66 +2589,86 @@ export default function NewQuotationPage() {
 function HeroHeader({
   careType,
   currentStep,
-  apiUrl,
 }: {
   careType: CareType | null;
   currentStep: Step;
-  apiUrl: string;
 }) {
   return (
-    <section className="mb-6 overflow-hidden rounded-[30px] border border-sky-100 bg-white shadow-[0_15px_50px_-20px_rgba(30,136,229,0.35)]">
-      <div className="grid gap-0 md:grid-cols-[1.3fr_0.9fr]">
-        <div className="bg-gradient-to-br from-[#0F4C81] via-[#1769aa] to-[#51b4e8] px-6 py-8 text-white md:px-8">
-          <div className="mb-4 inline-flex rounded-full bg-white/15 px-4 py-2 text-xs font-semibold uppercase tracking-[0.22em] text-sky-50">
-            Portal de presupuestos médicos
+    <section className="mb-4 overflow-hidden rounded-[30px] border border-[var(--brand-secondary-soft)] bg-white shadow-[0_15px_45px_-25px_rgba(30,136,229,0.32)]">
+      <div className="grid gap-0 md:grid-cols-[1.05fr_0.95fr]">
+        <div
+          className="relative overflow-hidden px-6 py-7 text-white md:px-8 md:py-8"
+          style={{
+            background:
+              'linear-gradient(135deg, var(--brand-primary), var(--brand-secondary))',
+          }}
+        >
+          <div className="absolute -right-16 -top-16 h-40 w-40 rounded-full bg-white/10 blur-2xl" />
+          <div className="absolute -bottom-20 left-10 h-48 w-48 rounded-full bg-white/10 blur-3xl" />
+
+          <div className="relative">
+            <div className="mb-4 inline-flex rounded-full bg-white/15 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.22em] text-white/90">
+              Portal de presupuestos médicos
+            </div>
+
+            <h1 className="max-w-xl text-3xl font-bold leading-tight md:text-[2.6rem]">
+              Presupuestos clínicos simples, rápidos y trazables
+            </h1>
+
+            <p className="mt-4 max-w-xl text-sm leading-6 text-white/88 md:text-base">
+              Valide al paciente, seleccione cobertura y construya el presupuesto en un flujo único para admisión, clínica y cobranza.
+            </p>
+
+            <div className="mt-5 flex flex-wrap gap-2">
+              <MiniPill>Atención conectada</MiniPill>
+              <MiniPill>Precios por cobertura</MiniPill>
+              <MiniPill>
+                {careType && currentStep > 0
+                  ? careType === 'AMBULATORY'
+                    ? 'Modo ambulatorio'
+                    : 'Modo quirúrgico'
+                  : 'Seleccione modalidad'}
+              </MiniPill>
+            </div>
           </div>
-
-          <h1 className="max-w-2xl text-3xl font-bold leading-tight md:text-4xl">
-            Emisión clínica con un flujo claro, limpio y orientado a demo
-          </h1>
-
-          <p className="mt-4 max-w-2xl text-sm leading-6 text-sky-50/90 md:text-base">
-            Seleccione modalidad, identifique al paciente, construya el presupuesto y revise el resumen final antes de emitirlo.
-          </p>
-
-          <div className="mt-6 flex flex-wrap gap-3">
-            <MiniPill>Azul clínico</MiniPill>
-            <MiniPill>Flujo guiado</MiniPill>
-            <MiniPill>
-              {careType && currentStep > 0
-                ? careType === 'AMBULATORY'
-                  ? 'Modo ambulatorio'
-                  : 'Modo quirúrgico'
-                : 'Seleccione modalidad'}
-            </MiniPill>
-          </div>
-
-          <div className="mt-6 text-xs text-sky-100/85">API activa: {apiUrl}</div>
         </div>
 
-        <div className="relative overflow-hidden bg-gradient-to-br from-sky-50 via-white to-cyan-50 p-6 md:p-8">
-          <div className="absolute -right-10 -top-10 h-40 w-40 rounded-full bg-sky-100/70 blur-2xl" />
-          <div className="absolute -bottom-10 -left-10 h-40 w-40 rounded-full bg-cyan-100/70 blur-2xl" />
+        <div className="relative overflow-hidden bg-gradient-to-br from-[var(--brand-primary-soft)] via-white to-[var(--brand-secondary-soft)] p-5 md:p-7">
+          <div className="absolute -right-10 -top-10 h-40 w-40 rounded-full bg-[var(--brand-primary-soft)] blur-2xl" />
+          <div className="absolute -bottom-10 -left-10 h-40 w-40 rounded-full bg-[var(--brand-secondary-soft)] blur-2xl" />
 
-          <div className="relative rounded-[24px] border border-sky-100 bg-white/90 p-5 shadow-[0_15px_40px_-25px_rgba(15,76,129,0.4)] backdrop-blur">
-            <div className="mb-4 flex items-center justify-between">
-              <span className="rounded-full bg-sky-100 px-3 py-1 text-[11px] font-bold uppercase tracking-wide text-sky-700">
-                Vista clínica
-              </span>
-              <span className="text-2xl">🩺</span>
+          <div className="relative rounded-[24px] border border-[var(--brand-secondary-soft)] bg-white/92 p-5 shadow-[0_15px_40px_-25px_rgba(15,76,129,0.4)] backdrop-blur">
+            <div className="mb-4 flex items-start justify-between gap-3">
+              <div>
+                <span className="rounded-full bg-[var(--brand-primary-soft)] px-3 py-1 text-[11px] font-bold uppercase tracking-wide text-[var(--brand-primary)]">
+                  Vista clínica
+                </span>
+                <p className="mt-3 text-sm font-semibold text-slate-800">
+                  Un presupuesto, una ruta clara
+                </p>
+              </div>
+
+              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[var(--brand-secondary-soft)] text-2xl">
+                🏥
+              </div>
             </div>
 
-            <div className="space-y-3">
-              <IllustrationLine width="85%" />
-              <IllustrationLine width="65%" />
-              <IllustrationLine width="100%" />
-            </div>
+            <div className="grid gap-3 md:grid-cols-[0.9fr_1.1fr]">
+              <div className="flex min-h-[150px] items-center justify-center rounded-3xl border border-[var(--brand-secondary-soft)] bg-gradient-to-br from-white to-[var(--brand-primary-soft)] p-4">
+                <div className="relative h-24 w-24">
+                  <div className="absolute inset-x-5 bottom-0 h-16 rounded-t-2xl bg-[var(--brand-primary)]/90" />
+                  <div className="absolute inset-x-8 top-2 h-14 rounded-t-xl bg-[var(--brand-secondary)]/90" />
+                  <div className="absolute left-1/2 top-9 h-10 w-3 -translate-x-1/2 rounded bg-white" />
+                  <div className="absolute left-1/2 top-12 h-3 w-10 -translate-x-1/2 rounded bg-white" />
+                  <div className="absolute bottom-0 left-1/2 h-8 w-7 -translate-x-1/2 rounded-t-lg bg-white/90" />
+                </div>
+              </div>
 
-            <div className="mt-5 grid grid-cols-2 gap-3">
-              <MiniPanel title="Paciente" value="Validación por RUT" />
-              <MiniPanel title="Cobertura" value="Isapre y plan" />
-              <MiniPanel title="Presupuesto" value="Prestaciones y totales" />
-              <MiniPanel title="Resumen" value="Preparado para PDF" />
+              <div className="space-y-3">
+                <MiniPanel title="Paciente" value="Validación por RUT" />
+                <MiniPanel title="Cobertura" value="Catálogo unificado" />
+                <MiniPanel title="Presupuesto" value="Totales trazables" />
+              </div>
             </div>
           </div>
         </div>
@@ -1650,18 +2691,18 @@ function StepCard({
   return (
     <div
       className={[
-        'rounded-2xl border px-4 py-4 transition-all',
+        'rounded-2xl border px-4 py-3.5 transition-all shadow-sm',
         active
-          ? 'border-sky-300 bg-gradient-to-br from-sky-600 to-cyan-500 text-white shadow-lg'
+          ? 'border-[var(--brand-secondary)] bg-gradient-to-br from-[var(--brand-primary)] to-[var(--brand-secondary)] text-white shadow-lg'
           : done
-          ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
-          : 'border-sky-100 bg-white text-slate-600',
+          ? 'border-[var(--brand-accent)] bg-[var(--brand-accent-soft)] text-slate-800'
+          : 'border-[var(--brand-secondary-soft)] bg-white text-slate-600',
       ].join(' ')}
     >
       <div className="text-[11px] font-bold uppercase tracking-[0.2em] opacity-80">
         {number}
       </div>
-      <div className="mt-1 text-sm font-semibold">{label}</div>
+      <div className="mt-1 text-sm font-bold">{label}</div>
     </div>
   );
 }
@@ -1676,9 +2717,9 @@ function SectionCard({
   children: React.ReactNode;
 }) {
   return (
-    <div className="rounded-[24px] border border-sky-100 bg-gradient-to-br from-white to-sky-50/60 p-5 shadow-[0_15px_30px_-25px_rgba(15,76,129,0.35)]">
+    <div className="rounded-[24px] border border-[var(--brand-secondary-soft)] bg-gradient-to-br from-white to-[var(--brand-primary-soft)] p-5 shadow-[0_15px_30px_-25px_rgba(15,76,129,0.35)]">
       <div className="mb-5">
-        <h3 className="text-lg font-semibold text-[#0F4C81]">{title}</h3>
+        <h3 className="text-lg font-semibold text-[var(--brand-primary)]">{title}</h3>
         <p className="mt-1 text-sm text-slate-600">{subtitle}</p>
       </div>
       {children}
@@ -1689,7 +2730,7 @@ function SectionCard({
 function Field({ label, children }: FieldProps) {
   return (
     <label className="block">
-      <span className="mb-2 block text-[11px] font-bold uppercase tracking-[0.18em] text-[#0F4C81]">
+      <span className="mb-2 block text-[11px] font-bold uppercase tracking-[0.18em] text-[var(--brand-primary)]">
         {label}
       </span>
       {children}
@@ -1699,9 +2740,14 @@ function Field({ label, children }: FieldProps) {
 
 function InitialCareTypeStep({
   careType,
+  allowedCareTypes,
   onSelect,
 }: {
   careType?: CareType | null;
+  allowedCareTypes: {
+    ambulatory: boolean;
+    surgical: boolean;
+  };
   onSelect: (value: CareType) => void;
 }) {
   return (
@@ -1709,8 +2755,9 @@ function InitialCareTypeStep({
       <button
         type="button"
         onClick={() => onSelect('AMBULATORY')}
+        disabled={!allowedCareTypes.ambulatory}
         className={[
-          'rounded-[24px] border p-6 text-left transition-all',
+          'rounded-[24px] border p-6 text-left transition-all disabled:cursor-not-allowed disabled:opacity-50',
           careType === 'AMBULATORY'
             ? 'border-sky-300 bg-gradient-to-br from-sky-600 to-cyan-500 text-white shadow-lg'
             : 'border-sky-100 bg-gradient-to-br from-white to-sky-50 hover:border-sky-200 hover:shadow-md',
@@ -1728,13 +2775,19 @@ function InitialCareTypeStep({
         >
           Para consultas, evaluaciones y procedimientos sin hospitalización.
         </p>
+        {!allowedCareTypes.ambulatory && (
+          <p className="mt-4 rounded-xl bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-500">
+            Sin acceso para este usuario
+          </p>
+        )}
       </button>
 
       <button
         type="button"
         onClick={() => onSelect('SURGICAL')}
+        disabled={!allowedCareTypes.surgical}
         className={[
-          'rounded-[24px] border p-6 text-left transition-all',
+          'rounded-[24px] border p-6 text-left transition-all disabled:cursor-not-allowed disabled:opacity-50',
           careType === 'SURGICAL'
             ? 'border-rose-300 bg-gradient-to-br from-rose-500 to-red-500 text-white shadow-lg'
             : 'border-sky-100 bg-gradient-to-br from-white to-sky-50 hover:border-sky-200 hover:shadow-md',
@@ -1752,20 +2805,18 @@ function InitialCareTypeStep({
         >
           Para presupuestos con prestaciones quirúrgicas, pabellón y flujo operatorio.
         </p>
+        {!allowedCareTypes.surgical && (
+          <p className="mt-4 rounded-xl bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-500">
+            Sin acceso para este usuario
+          </p>
+        )}
       </button>
     </div>
   );
 }
 
+
 function BudgetStep({
-  isapres,
-  loadingIsapres,
-  selectedIsapreId,
-  setSelectedIsapreId,
-  plans,
-  loadingPlans,
-  selectedPlanId,
-  setSelectedPlanId,
   procedureSearch,
   setProcedureSearch,
   loadingProcedures,
@@ -1799,15 +2850,12 @@ function BudgetStep({
   total,
   notes,
   setNotes,
+  careType,
+  showBasketFinder,
+  setShowBasketFinder,
+  showPackageFinder,
+  setShowPackageFinder,
 }: {
-  isapres: Isapre[];
-  loadingIsapres: boolean;
-  selectedIsapreId: string;
-  setSelectedIsapreId: React.Dispatch<React.SetStateAction<string>>;
-  plans: IsaprePlan[];
-  loadingPlans: boolean;
-  selectedPlanId: string;
-  setSelectedPlanId: React.Dispatch<React.SetStateAction<string>>;
   procedureSearch: string;
   setProcedureSearch: React.Dispatch<React.SetStateAction<string>>;
   loadingProcedures: boolean;
@@ -1831,9 +2879,9 @@ function BudgetStep({
   addingPackageId: number | null;
   budgetItems: BudgetItem[];
   addedGroups: AddedGroupSummary[];
-  handleQuantityChange: (localId: string, quantity: number) => void;
-  handleRemoveItem: (localId: string) => void;
-  handleRemoveGroup: (groupKey: string, groupType: 'BASKET' | 'PACKAGE') => void;
+  handleQuantityChange: (localId: string, quantity: number) => Promise<void>;
+  handleRemoveItem: (localId: string) => Promise<void>;
+  handleRemoveGroup: (groupKey: string, groupType: 'BASKET' | 'PACKAGE') => Promise<void>;
   subtotal: number;
   sectionTotals: Record<BillingSection, number>;
   discountTotal: string;
@@ -1841,54 +2889,48 @@ function BudgetStep({
   total: number;
   notes: string;
   setNotes: React.Dispatch<React.SetStateAction<string>>;
+  careType: CareType | null;
+  showBasketFinder: boolean;
+  setShowBasketFinder: React.Dispatch<React.SetStateAction<boolean>>;
+  showPackageFinder: boolean;
+  setShowPackageFinder: React.Dispatch<React.SetStateAction<boolean>>;
 }) {
   const procedureItems = budgetItems.filter((item) => item.section === 'PROCEDURE');
   const supplyItems = budgetItems.filter((item) => item.section === 'SUPPLY');
   const drugItems = budgetItems.filter((item) => item.section === 'DRUG');
   const bedItems = budgetItems.filter((item) => item.section === 'BED');
+  const packageSearchEnabled = careType === 'SURGICAL';
 
   return (
     <div className="space-y-6">
-      <SectionCard title="Cobertura" subtitle="Seleccione cobertura antes de agregar prestaciones.">
-        <div className="grid gap-4 md:grid-cols-2">
-          <Field label="Isapre">
-            <select
-              value={selectedIsapreId}
-              onChange={(e) => setSelectedIsapreId(e.target.value)}
-              className="input-clinical"
-              disabled={loadingIsapres}
-            >
-              <option value="">Seleccione isapre</option>
-              {isapres.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.name}
-                </option>
-              ))}
-            </select>
-          </Field>
-
-          <Field label="Plan">
-            <select
-              value={selectedPlanId}
-              onChange={(e) => setSelectedPlanId(e.target.value)}
-              className="input-clinical"
-              disabled={loadingPlans || !selectedIsapreId}
-            >
-              <option value="">Seleccione plan</option>
-              {plans.map((plan) => (
-                <option key={plan.id} value={plan.id}>
-                  {plan.name}
-                </option>
-              ))}
-            </select>
-          </Field>
-        </div>
-      </SectionCard>
-
       <SectionCard
         title="Prestaciones clínicas"
-        subtitle="Regla aplicada en esta sección: la prestación más cara queda al 100% y el resto al 50%."
+        subtitle={
+          packageSearchEnabled
+            ? 'Busque una prestación. Los valores consultados consideran la cobertura seleccionada en el paso anterior. Si existe un paquete asociado, el sistema lo sugerirá antes de agregar la prestación individual.'
+            : 'Busque una prestación. Los valores consultados consideran la cobertura seleccionada en el paso anterior. En modalidad ambulatoria solo podrá trabajar con prestaciones individuales y canastas.'
+        }
       >
+        <div className="mb-4 flex flex-wrap gap-3">
+          <button
+            type="button"
+            onClick={() => setShowBasketFinder((prev) => !prev)}
+            className="btn-health-secondary"
+          >
+            {showBasketFinder ? 'Cerrar buscador de canastas' : 'Buscador de canastas'}
+          </button>
+
+          {packageSearchEnabled && (
+            <button
+              type="button"
+              onClick={() => setShowPackageFinder((prev) => !prev)}
+              className="btn-health-secondary"
+            >
+              {showPackageFinder ? 'Cerrar buscador de paquetes' : 'Buscador de paquetes'}
+            </button>
+          )}
+        </div>
+
         <div className="grid gap-3 md:grid-cols-[1fr_auto]">
           <input
             type="text"
@@ -1930,7 +2972,7 @@ function BudgetStep({
                   disabled={addingProcedureId === procedure.id}
                   className="btn-health-secondary"
                 >
-                  {addingProcedureId === procedure.id ? 'Agregando...' : 'Agregar'}
+                  {addingProcedureId === procedure.id ? 'Evaluando...' : 'Agregar'}
                 </button>
               </div>
             ))
@@ -1938,111 +2980,118 @@ function BudgetStep({
         </div>
       </SectionCard>
 
-      <SectionCard
-        title="Canastas"
-        subtitle="Las canastas se expanden a ítems editables dentro del presupuesto."
-      >
-        <div className="grid gap-3 md:grid-cols-[1fr_auto]">
-          <input
-            type="text"
-            value={basketSearch}
-            onChange={(e) => setBasketSearch(e.target.value)}
-            placeholder="Buscar canasta por código o nombre"
-            className="input-clinical"
-          />
-          <button
-            type="button"
-            onClick={handleSearchBaskets}
-            disabled={loadingBaskets}
-            className="btn-health-primary"
-          >
-            {loadingBaskets ? 'Buscando...' : 'Buscar'}
-          </button>
-        </div>
+      {showBasketFinder && (
+        <SectionCard
+          title="Buscador de canastas"
+          subtitle="Las canastas se expanden a ítems editables dentro del presupuesto."
+        >
+          <div className="grid gap-3 md:grid-cols-[1fr_auto]">
+            <input
+              type="text"
+              value={basketSearch}
+              onChange={(e) => setBasketSearch(e.target.value)}
+              placeholder="Buscar canasta por código o nombre"
+              className="input-clinical"
+            />
+            <button
+              type="button"
+              onClick={handleSearchBaskets}
+              disabled={loadingBaskets}
+              className="btn-health-primary"
+            >
+              {loadingBaskets ? 'Buscando...' : 'Buscar'}
+            </button>
+          </div>
 
-        <div className="mt-4 space-y-3">
-          {basketResults.length === 0 ? (
-            <p className="text-sm text-slate-500">Busque canastas para agregarlas.</p>
-          ) : (
-            basketResults.map((basket) => (
-              <div
-                key={basket.id}
-                className="flex items-center justify-between rounded-xl border border-slate-200 p-4"
-              >
-                <div>
-                  <p className="text-sm font-semibold text-slate-900">{basket.name}</p>
-                  <p className="text-xs text-slate-500">
-                    {basket.code} · {basket.items.length} componente(s)
-                  </p>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => handleAddBasket(basket)}
-                  disabled={addingBasketId === basket.id}
-                  className="btn-health-secondary"
+          <div className="mt-4 space-y-3">
+            {basketResults.length === 0 ? (
+              <p className="text-sm text-slate-500">Busque canastas para agregarlas.</p>
+            ) : (
+              basketResults.map((basket) => (
+                <div
+                  key={basket.id}
+                  className="flex items-center justify-between rounded-xl border border-slate-200 p-4"
                 >
-                  {addingBasketId === basket.id ? 'Agregando...' : 'Agregar'}
-                </button>
-              </div>
-            ))
-          )}
-        </div>
-      </SectionCard>
+                  <div>
+                    <p className="text-sm font-semibold text-slate-900">{basket.name}</p>
+                    <p className="text-xs text-slate-500">
+                      {basket.code} · {basket.items.length} componente(s)
+                    </p>
+                  </div>
 
-      <SectionCard
-        title="Paquetes"
-        subtitle="Los paquetes se expanden a ítems bloqueados que no pueden editarse individualmente."
-      >
-        <div className="grid gap-3 md:grid-cols-[1fr_auto]">
-          <input
-            type="text"
-            value={packageSearch}
-            onChange={(e) => setPackageSearch(e.target.value)}
-            placeholder="Buscar paquete por código o nombre"
-            className="input-clinical"
-          />
-          <button
-            type="button"
-            onClick={handleSearchPackages}
-            disabled={loadingPackages}
-            className="btn-health-primary"
-          >
-            {loadingPackages ? 'Buscando...' : 'Buscar'}
-          </button>
-        </div>
-
-        <div className="mt-4 space-y-3">
-          {packageResults.length === 0 ? (
-            <p className="text-sm text-slate-500">Busque paquetes para agregarlos.</p>
-          ) : (
-            packageResults.map((pkg) => (
-              <div
-                key={pkg.id}
-                className="flex items-center justify-between rounded-xl border border-slate-200 p-4"
-              >
-                <div>
-                  <p className="text-sm font-semibold text-slate-900">{pkg.name}</p>
-                  <p className="text-xs text-slate-500">
-                    {pkg.code} · {pkg.items.length} componente(s)
-                  </p>
+                  <button
+                    type="button"
+                    onClick={() => handleAddBasket(basket)}
+                    disabled={addingBasketId === basket.id}
+                    className="btn-health-secondary"
+                  >
+                    {addingBasketId === basket.id ? 'Agregando...' : 'Agregar'}
+                  </button>
                 </div>
+              ))
+            )}
+          </div>
+        </SectionCard>
+      )}
 
-                <button
-                  type="button"
-                  onClick={() => handleAddPackage(pkg)}
-                  disabled={addingPackageId === pkg.id}
-                  className="btn-health-secondary"
+      {packageSearchEnabled && showPackageFinder && (
+        <SectionCard
+          title="Buscador de paquetes"
+          subtitle="Los paquetes se validan antes de agregarse para detectar campañas activas o comportamiento PAD."
+        >
+          <div className="grid gap-3 md:grid-cols-[1fr_auto]">
+            <input
+              type="text"
+              value={packageSearch}
+              onChange={(e) => setPackageSearch(e.target.value)}
+              placeholder="Buscar paquete por código o nombre"
+              className="input-clinical"
+            />
+            <button
+              type="button"
+              onClick={handleSearchPackages}
+              disabled={loadingPackages}
+              className="btn-health-primary"
+            >
+              {loadingPackages ? 'Buscando...' : 'Buscar'}
+            </button>
+          </div>
+
+          <div className="mt-4 space-y-3">
+            {packageResults.length === 0 ? (
+              <p className="text-sm text-slate-500">Busque paquetes para agregarlos.</p>
+            ) : (
+              packageResults.map((pkg) => (
+                <div
+                  key={pkg.id}
+                  className="flex items-center justify-between rounded-xl border border-slate-200 p-4"
                 >
-                  {addingPackageId === pkg.id ? 'Agregando...' : 'Agregar'}
-                </button>
-              </div>
-            ))
-          )}
-        </div>
-      </SectionCard>
+                  <div>
+                    <p className="text-sm font-semibold text-slate-900">{pkg.name}</p>
+                    <p className="text-xs text-slate-500">
+                      {pkg.code}
+                      {pkg.packageType ? ` · ${pkg.packageType === 'PAD' ? 'PAD' : 'Convencional'}` : ''}
+                      {' · '}
+                      {pkg.items.length} componente(s)
+                    </p>
+                  </div>
 
-      {(addedGroups.length > 0) && (
+                  <button
+                    type="button"
+                    onClick={() => handleAddPackage(pkg)}
+                    disabled={addingPackageId === pkg.id}
+                    className="btn-health-secondary"
+                  >
+                    {addingPackageId === pkg.id ? 'Agregando...' : 'Agregar'}
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+        </SectionCard>
+      )}
+
+      {addedGroups.length > 0 && (
         <SectionCard
           title="Grupos agregados"
           subtitle="Puede quitar canastas o paquetes completos desde este resumen."
@@ -2168,6 +3217,184 @@ function BudgetStep({
   );
 }
 
+function PackageSuggestionModal({
+  open,
+  procedureName,
+  packages,
+  loading,
+  onClose,
+  onContinueWithoutPackage,
+  onSelectPackage,
+}: {
+  open: boolean;
+  procedureName: string;
+  packages: PackageSuggestionResult[];
+  loading: boolean;
+  onClose: () => void;
+  onContinueWithoutPackage: () => Promise<void>;
+  onSelectPackage: (pkg: PackageSuggestionResult) => Promise<void>;
+}) {
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/35 px-4">
+      <div className="w-full max-w-2xl rounded-[24px] border border-sky-100 bg-white p-6 shadow-2xl">
+        <h3 className="text-xl font-bold text-[#0F4C81]">Existe un paquete disponible</h3>
+        <p className="mt-2 text-sm text-slate-600">
+          La prestación "{procedureName}" tiene uno o más paquetes asociados. Puede usar uno de ellos o continuar con la prestación individual.
+        </p>
+
+        <div className="mt-5 space-y-3">
+          {packages.map((pkg) => (
+            <div
+              key={pkg.id}
+              className="flex items-center justify-between rounded-xl border border-slate-200 p-4"
+            >
+              <div>
+                <p className="text-sm font-semibold text-slate-900">{pkg.name}</p>
+                <p className="text-xs text-slate-500">
+                  {pkg.code}
+                  {pkg.packageType ? ` · ${pkg.packageType === 'PAD' ? 'PAD' : 'Convencional'}` : ''}
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => onSelectPackage(pkg)}
+                disabled={loading}
+                className="btn-health-primary"
+              >
+                {loading ? 'Procesando...' : 'Usar paquete'}
+              </button>
+            </div>
+          ))}
+        </div>
+
+        <div className="mt-6 flex flex-wrap justify-end gap-3">
+          <button type="button" onClick={onClose} className="btn-health-secondary">
+            Cerrar
+          </button>
+          <button
+            type="button"
+            onClick={onContinueWithoutPackage}
+            disabled={loading}
+            className="btn-health-primary"
+          >
+            Agregar prestación
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CampaignSelectionModal({
+  open,
+  packageName,
+  campaignName,
+  discountPercentage,
+  loading,
+  onClose,
+  onAccept,
+  onReject,
+}: {
+  open: boolean;
+  packageName: string;
+  campaignName: string;
+  discountPercentage: number;
+  loading: boolean;
+  onClose: () => void;
+  onAccept: () => Promise<void>;
+  onReject: () => Promise<void>;
+}) {
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/35 px-4">
+      <div className="w-full max-w-xl rounded-[24px] border border-sky-100 bg-white p-6 shadow-2xl">
+        <h3 className="text-xl font-bold text-[#0F4C81]">Campaña activa en honorarios</h3>
+        <p className="mt-2 text-sm text-slate-600">
+          El paquete "{packageName}" tiene la campaña "{campaignName}" activa. Puede aplicar el descuento de {discountPercentage}% sobre honorarios médicos o continuar sin campaña.
+        </p>
+
+        <div className="mt-6 flex flex-wrap justify-end gap-3">
+          <button type="button" onClick={onClose} className="btn-health-secondary">
+            Cerrar
+          </button>
+          <button
+            type="button"
+            onClick={onReject}
+            disabled={loading}
+            className="btn-health-secondary"
+          >
+            Continuar sin campaña
+          </button>
+          <button
+            type="button"
+            onClick={onAccept}
+            disabled={loading}
+            className="btn-health-primary"
+          >
+            {loading ? 'Aplicando...' : 'Aplicar campaña'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PadSelectionModal({
+  open,
+  packageName,
+  loading,
+  onClose,
+  onSelectFactor,
+}: {
+  open: boolean;
+  packageName: string;
+  loading: boolean;
+  onClose: () => void;
+  onSelectFactor: (factor: number) => Promise<void>;
+}) {
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/35 px-4">
+      <div className="w-full max-w-xl rounded-[24px] border border-sky-100 bg-white p-6 shadow-2xl">
+        <h3 className="text-xl font-bold text-[#0F4C81]">Paquete PAD</h3>
+        <p className="mt-2 text-sm text-slate-600">
+          El paquete "{packageName}" corresponde a un PAD. Seleccione el factor correspondiente y el sistema lo agregará bloqueado y lo enviará directo al resumen.
+        </p>
+
+        <div className="mt-5 grid gap-3 md:grid-cols-2">
+          <button
+            type="button"
+            onClick={() => onSelectFactor(0.5)}
+            disabled={loading}
+            className="btn-health-primary"
+          >
+            {loading ? 'Procesando...' : 'Parto (50%)'}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => onSelectFactor(0.25)}
+            disabled={loading}
+            className="btn-health-secondary"
+          >
+            {loading ? 'Procesando...' : 'Cesárea (25%)'}
+          </button>
+        </div>
+
+        <div className="mt-6 flex justify-end">
+          <button type="button" onClick={onClose} className="btn-health-secondary">
+            Cerrar
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function BudgetGroup({
   title,
@@ -2178,8 +3405,8 @@ function BudgetGroup({
 }: {
   title: string;
   items: BudgetItem[];
-  handleQuantityChange: (localId: string, quantity: number) => void;
-  handleRemoveItem: (localId: string) => void;
+  handleQuantityChange: (localId: string, quantity: number) => Promise<void>;
+  handleRemoveItem: (localId: string) => Promise<void>;
   total: number;
 }) {
   return (
@@ -2216,7 +3443,7 @@ function BudgetGroup({
                 min={1}
                 value={item.quantity}
                 disabled={item.lockedByPackage}
-                onChange={(e) => handleQuantityChange(item.localId, Number(e.target.value))}
+                onChange={(e) => void handleQuantityChange(item.localId, Number(e.target.value))}
                 className="input-clinical disabled:cursor-not-allowed disabled:bg-slate-100"
               />
 
@@ -2233,7 +3460,7 @@ function BudgetGroup({
               ) : (
                 <button
                   type="button"
-                  onClick={() => handleRemoveItem(item.localId)}
+                  onClick={() => void handleRemoveItem(item.localId)}
                   className="text-sm font-semibold text-rose-600 hover:text-rose-700"
                 >
                   Quitar
@@ -2254,8 +3481,8 @@ function SummaryStep({
   email,
   phone,
   careType,
-  isapreName,
-  planName,
+  coverageLabel,
+  coverageDetailLabel,
   budgetItems,
   subtotal,
   discountTotal,
@@ -2268,8 +3495,8 @@ function SummaryStep({
   email: string;
   phone: string;
   careType: CareType | null;
-  isapreName: string;
-  planName: string;
+  coverageLabel: string;
+  coverageDetailLabel: string;
   budgetItems: BudgetItem[];
   subtotal: number;
   discountTotal: number;
@@ -2293,12 +3520,12 @@ function SummaryStep({
               careType === 'AMBULATORY'
                 ? 'Ambulatorio'
                 : careType === 'SURGICAL'
-                ? 'Quirúrgico'
-                : '-'
+                  ? 'Quirúrgico'
+                  : '-'
             }
           />
-          <SummaryRow label="Isapre" value={isapreName} />
-          <SummaryRow label="Plan" value={planName} />
+          <SummaryRow label="Cobertura" value={coverageLabel} />
+          <SummaryRow label="Detalle cobertura" value={coverageDetailLabel} />
         </div>
       </SectionCard>
 
@@ -2376,7 +3603,7 @@ function SummaryRow({ label, value }: { label: string; value: string }) {
 
 function MiniPill({ children }: { children: React.ReactNode }) {
   return (
-    <span className="rounded-full border border-white/20 bg-white/10 px-3 py-1.5 text-xs font-semibold text-white/90">
+    <span className="rounded-full border border-white/20 bg-white/12 px-3 py-1.5 text-xs font-semibold text-white/90 backdrop-blur">
       {children}
     </span>
   );
@@ -2384,9 +3611,9 @@ function MiniPill({ children }: { children: React.ReactNode }) {
 
 function MiniPanel({ title, value }: { title: string; value: string }) {
   return (
-    <div className="rounded-2xl border border-sky-100 bg-sky-50 px-3 py-3">
-      <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-sky-600">{title}</div>
-      <div className="mt-1 text-sm font-semibold text-[#0F4C81]">{value}</div>
+    <div className="rounded-2xl border border-[var(--brand-secondary-soft)] bg-[var(--brand-primary-soft)] px-3 py-3">
+      <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-[var(--brand-secondary)]">{title}</div>
+      <div className="mt-1 text-sm font-semibold text-[var(--brand-primary)]">{value}</div>
     </div>
   );
 }
@@ -2413,28 +3640,28 @@ function FloatingToast({
     alert.type === 'success'
       ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
       : alert.type === 'warning'
-      ? 'border-amber-200 bg-amber-50 text-amber-800'
-      : alert.type === 'error'
-      ? 'border-rose-200 bg-rose-50 text-rose-800'
-      : 'border-sky-200 bg-sky-50 text-sky-800';
+        ? 'border-amber-200 bg-amber-50 text-amber-800'
+        : alert.type === 'error'
+          ? 'border-rose-200 bg-rose-50 text-rose-800'
+          : 'border-sky-200 bg-sky-50 text-sky-800';
 
   const icon =
     alert.type === 'success'
       ? '✓'
       : alert.type === 'warning'
-      ? '!'
-      : alert.type === 'error'
-      ? '✕'
-      : 'i';
+        ? '!'
+        : alert.type === 'error'
+          ? '✕'
+          : 'i';
 
   const title =
     alert.type === 'success'
       ? 'Correcto'
       : alert.type === 'warning'
-      ? 'Atención'
-      : alert.type === 'error'
-      ? 'Error'
-      : 'Información';
+        ? 'Atención'
+        : alert.type === 'error'
+          ? 'Error'
+          : 'Información';
 
   return (
     <div className="pointer-events-none fixed bottom-6 right-6 z-50 w-full max-w-md px-4">

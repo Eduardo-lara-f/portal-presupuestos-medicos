@@ -7,13 +7,6 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 type CoverageType = 'ISAPRE_PLAN' | 'FONASA' | 'PARTICULAR' | 'OTHER';
 type CareType = 'AMBULATORY' | 'SURGICAL' | 'BOTH';
 
-type Division = {
-  id: number;
-  name: string;
-  code: string;
-  status: boolean;
-};
-
 type Procedure = {
   id: number;
   divisionId: number;
@@ -38,6 +31,22 @@ type IsaprePlan = {
   name: string;
   code?: string | null;
   active: boolean;
+};
+
+type CoverageCatalogItem = {
+  type: CoverageType;
+  label: string;
+  enabled: boolean;
+  requiresIsapre: boolean;
+  requiresPlan: boolean;
+  requiresFonasaCode: boolean;
+  requiresPayerLabel: boolean;
+};
+
+type CoverageCatalogResponse = {
+  divisionId: number;
+  coverages: CoverageCatalogItem[];
+  isapres: Isapre[];
 };
 
 type ProcedurePrice = {
@@ -83,6 +92,20 @@ type AlertState = {
   message: string;
 } | null;
 
+type AuthUser = {
+  id: number;
+  name: string;
+  email: string;
+  role: string;
+  status: boolean;
+  divisionId?: number | null;
+  division?: {
+    id: number;
+    name: string;
+    code?: string;
+  } | null;
+};
+
 type PriceFormState = {
   divisionId: string;
   procedureId: string;
@@ -127,21 +150,21 @@ function formatDateInput(value?: string | null) {
 }
 
 export default function MaintainersPricesPage() {
-  const [divisions, setDivisions] = useState<Division[]>([]);
   const [procedures, setProcedures] = useState<Procedure[]>([]);
   const [prices, setPrices] = useState<ProcedurePrice[]>([]);
   const [isapres, setIsapres] = useState<Isapre[]>([]);
   const [plans, setPlans] = useState<IsaprePlan[]>([]);
+  const [coverageCatalog, setCoverageCatalog] = useState<CoverageCatalogItem[]>([]);
 
-  const [loadingDivisions, setLoadingDivisions] = useState(false);
   const [loadingProcedures, setLoadingProcedures] = useState(false);
   const [loadingPrices, setLoadingPrices] = useState(false);
-  const [loadingIsapres, setLoadingIsapres] = useState(false);
+  const [loadingCatalog, setLoadingCatalog] = useState(false);
   const [loadingPlans, setLoadingPlans] = useState(false);
   const [savingPrice, setSavingPrice] = useState(false);
   const [updatingStatusId, setUpdatingStatusId] = useState<number | null>(null);
 
   const [selectedDivisionId, setSelectedDivisionId] = useState('');
+  const [selectedDivisionName, setSelectedDivisionName] = useState('-');
   const [search, setSearch] = useState('');
   const [coverageTypeFilter, setCoverageTypeFilter] = useState('');
   const [activeFilter, setActiveFilter] = useState('true');
@@ -158,39 +181,32 @@ export default function MaintainersPricesPage() {
   }, [alert]);
 
   useEffect(() => {
-    async function loadInitialData() {
-      try {
-        setLoadingDivisions(true);
+    try {
+      const rawAuthUser = localStorage.getItem('authUser');
+      if (!rawAuthUser) return;
 
-        const divisionsResponse = await fetch(`${API_URL}/divisions`);
+      const parsedAuthUser = JSON.parse(rawAuthUser) as AuthUser;
 
-        if (!divisionsResponse.ok) {
-          throw new Error('No se pudieron cargar las divisiones.');
-        }
+      const divisionId =
+        parsedAuthUser?.divisionId ?? parsedAuthUser?.division?.id ?? null;
+      const divisionName = parsedAuthUser?.division?.name ?? '-';
 
-        const divisionsData: Division[] = await divisionsResponse.json();
-        setDivisions(divisionsData);
-
-        if (divisionsData.length > 0) {
-          const initialDivisionId = String(divisionsData[0].id);
-          setSelectedDivisionId(initialDivisionId);
-          setForm((prev) => ({
-            ...prev,
-            divisionId: initialDivisionId,
-          }));
-        }
-      } catch (error) {
-        console.error(error);
-        setAlert({
-          type: 'error',
-          message: 'No se pudieron cargar los datos iniciales del mantenedor.',
-        });
-      } finally {
-        setLoadingDivisions(false);
+      if (typeof divisionId === 'number') {
+        const normalizedDivisionId = String(divisionId);
+        setSelectedDivisionId(normalizedDivisionId);
+        setSelectedDivisionName(divisionName);
+        setForm((prev) => ({
+          ...prev,
+          divisionId: normalizedDivisionId,
+        }));
       }
+    } catch (error) {
+      console.error(error);
+      setAlert({
+        type: 'error',
+        message: 'No se pudo cargar la división asignada del usuario.',
+      });
     }
-
-    loadInitialData();
   }, []);
 
   useEffect(() => {
@@ -209,17 +225,21 @@ export default function MaintainersPricesPage() {
 
   useEffect(() => {
     if (!form.divisionId) {
+      setCoverageCatalog([]);
       setIsapres([]);
       setPlans([]);
       setForm((prev) => ({
         ...prev,
+        coverageType: 'ISAPRE_PLAN',
         isapreId: '',
         isaprePlanId: '',
+        fonasaCode: '',
+        payerLabel: '',
       }));
       return;
     }
 
-    loadIsapresByDivision(form.divisionId);
+    loadCoverageCatalog(form.divisionId);
   }, [form.divisionId]);
 
   useEffect(() => {
@@ -234,6 +254,14 @@ export default function MaintainersPricesPage() {
 
     loadPlansByIsapre(form.isapreId);
   }, [form.isapreId]);
+
+  const selectedCoverageConfig = useMemo(() => {
+    return coverageCatalog.find((item) => item.type === form.coverageType) ?? null;
+  }, [coverageCatalog, form.coverageType]);
+
+  const enabledCoverageOptions = useMemo(() => {
+    return coverageCatalog.filter((item) => item.enabled);
+  }, [coverageCatalog]);
 
   async function loadPrices() {
     try {
@@ -302,26 +330,58 @@ export default function MaintainersPricesPage() {
     }
   }
 
-  async function loadIsapresByDivision(divisionId: string) {
+  async function loadCoverageCatalog(divisionId: string) {
     try {
-      setLoadingIsapres(true);
+      setLoadingCatalog(true);
 
-      const response = await fetch(`${API_URL}/isapres?divisionId=${divisionId}`);
+      const response = await fetch(
+        `${API_URL}/procedure-prices/catalog?divisionId=${divisionId}`,
+      );
 
       if (!response.ok) {
-        throw new Error('No se pudieron cargar las isapres.');
+        throw new Error('No se pudo cargar el catálogo de coberturas.');
       }
 
-      const data: Isapre[] = await response.json();
-      setIsapres(data);
+      const data: CoverageCatalogResponse = await response.json();
+
+      setCoverageCatalog(data.coverages);
+      setIsapres(data.isapres);
+
+      const currentCoverageStillValid = data.coverages.some(
+        (item) => item.type === form.coverageType && item.enabled,
+      );
+
+      const fallbackCoverage =
+        data.coverages.find((item) => item.enabled)?.type ?? 'ISAPRE_PLAN';
+
+      setForm((prev) => {
+        const nextCoverageType = currentCoverageStillValid
+          ? prev.coverageType
+          : fallbackCoverage;
+
+        const nextCoverageConfig =
+          data.coverages.find((item) => item.type === nextCoverageType) ?? null;
+
+        return {
+          ...prev,
+          coverageType: nextCoverageType,
+          isapreId: nextCoverageConfig?.requiresIsapre ? prev.isapreId : '',
+          isaprePlanId: nextCoverageConfig?.requiresPlan ? prev.isaprePlanId : '',
+          fonasaCode: nextCoverageConfig?.requiresFonasaCode ? prev.fonasaCode : '',
+          payerLabel: nextCoverageConfig?.requiresPayerLabel ? prev.payerLabel : '',
+        };
+      });
     } catch (error) {
       console.error(error);
+      setCoverageCatalog([]);
+      setIsapres([]);
+      setPlans([]);
       setAlert({
         type: 'error',
-        message: 'No se pudieron cargar las isapres de la división seleccionada.',
+        message: 'No se pudo cargar el catálogo de coberturas.',
       });
     } finally {
-      setLoadingIsapres(false);
+      setLoadingCatalog(false);
     }
   }
 
@@ -351,10 +411,13 @@ export default function MaintainersPricesPage() {
     setEditingPriceId(null);
     setPlans([]);
 
+    const defaultCoverageType =
+      coverageCatalog.find((item) => item.enabled)?.type ?? 'ISAPRE_PLAN';
+
     setForm({
       divisionId: selectedDivisionId || '',
       procedureId: '',
-      coverageType: 'ISAPRE_PLAN',
+      coverageType: defaultCoverageType,
       isapreId: '',
       isaprePlanId: '',
       fonasaCode: '',
@@ -367,17 +430,20 @@ export default function MaintainersPricesPage() {
   }
 
   function handleCoverageTypeChange(nextCoverageType: CoverageType) {
+    const config = coverageCatalog.find((item) => item.type === nextCoverageType);
+
     setForm((prev) => ({
       ...prev,
       coverageType: nextCoverageType,
-      isapreId: nextCoverageType === 'ISAPRE_PLAN' ? prev.isapreId : '',
-      isaprePlanId: nextCoverageType === 'ISAPRE_PLAN' ? prev.isaprePlanId : '',
-      fonasaCode: nextCoverageType === 'FONASA' ? prev.fonasaCode : '',
-      payerLabel:
-        nextCoverageType === 'PARTICULAR' || nextCoverageType === 'OTHER'
-          ? prev.payerLabel
-          : '',
+      isapreId: config?.requiresIsapre ? prev.isapreId : '',
+      isaprePlanId: config?.requiresPlan ? prev.isaprePlanId : '',
+      fonasaCode: config?.requiresFonasaCode ? prev.fonasaCode : '',
+      payerLabel: config?.requiresPayerLabel ? prev.payerLabel : '',
     }));
+
+    if (!config?.requiresIsapre) {
+      setPlans([]);
+    }
   }
 
   function handleEdit(price: ProcedurePrice) {
@@ -409,10 +475,34 @@ export default function MaintainersPricesPage() {
       return;
     }
 
-    if (form.coverageType === 'ISAPRE_PLAN' && (!form.isapreId || !form.isaprePlanId)) {
+    if (selectedCoverageConfig?.requiresIsapre && !form.isapreId) {
       setAlert({
         type: 'info',
-        message: 'Para ISAPRE_PLAN debe seleccionar isapre y plan.',
+        message: 'Debe seleccionar una isapre.',
+      });
+      return;
+    }
+
+    if (selectedCoverageConfig?.requiresPlan && !form.isaprePlanId) {
+      setAlert({
+        type: 'info',
+        message: 'Debe seleccionar un plan.',
+      });
+      return;
+    }
+
+    if (selectedCoverageConfig?.requiresFonasaCode && !form.fonasaCode.trim()) {
+      setAlert({
+        type: 'info',
+        message: 'Debe ingresar el código Fonasa.',
+      });
+      return;
+    }
+
+    if (selectedCoverageConfig?.requiresPayerLabel && !form.payerLabel.trim()) {
+      setAlert({
+        type: 'info',
+        message: 'Debe ingresar el pagador.',
       });
       return;
     }
@@ -425,21 +515,19 @@ export default function MaintainersPricesPage() {
         procedureId: Number(form.procedureId),
         coverageType: form.coverageType,
         isapreId:
-          form.coverageType === 'ISAPRE_PLAN' && form.isapreId
+          selectedCoverageConfig?.requiresIsapre && form.isapreId
             ? Number(form.isapreId)
             : undefined,
         isaprePlanId:
-          form.coverageType === 'ISAPRE_PLAN' && form.isaprePlanId
+          selectedCoverageConfig?.requiresPlan && form.isaprePlanId
             ? Number(form.isaprePlanId)
             : undefined,
-        fonasaCode:
-          form.coverageType === 'FONASA'
-            ? form.fonasaCode.trim() || undefined
-            : undefined,
-        payerLabel:
-          form.coverageType === 'PARTICULAR' || form.coverageType === 'OTHER'
-            ? form.payerLabel.trim() || undefined
-            : undefined,
+        fonasaCode: selectedCoverageConfig?.requiresFonasaCode
+          ? form.fonasaCode.trim() || undefined
+          : undefined,
+        payerLabel: selectedCoverageConfig?.requiresPayerLabel
+          ? form.payerLabel.trim() || undefined
+          : undefined,
         price: Number(form.price),
         currency: form.currency.trim() || 'CLP',
         effectiveFrom: form.effectiveFrom || undefined,
@@ -527,53 +615,59 @@ export default function MaintainersPricesPage() {
   }, [editingPriceId]);
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-xl font-semibold">Mantenedor de precios</h1>
+    <div className="mx-auto w-full max-w-6xl space-y-8 px-4 pb-8 pt-2 md:px-8 xl:px-12">
+      <div className="flex justify-center">
+        <div className="w-full max-w-3xl rounded-[28px] border border-sky-100 bg-white px-6 py-6 text-center shadow-[0_15px_40px_-24px_rgba(15,76,129,0.35)]">
+          <p className="text-xs font-semibold uppercase tracking-[0.24em] text-sky-600">
+            Mantenedores
+          </p>
+          <h1 className="mt-2 text-3xl font-bold tracking-tight text-[#0F4C81] md:text-4xl">
+            Mantenedor de precios
+          </h1>
+          <p className="mt-3 text-sm text-slate-600 md:text-base">
+            Administre precios por prestación y cobertura dentro de la división asignada.
+          </p>
+        </div>
       </div>
 
       {alert && (
         <div
           className={[
-            'rounded border px-3 py-2 text-sm',
+            'rounded-2xl border px-4 py-3 text-sm shadow-sm',
             alert.type === 'success'
-              ? 'border-emerald-300 text-emerald-700'
+              ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
               : alert.type === 'error'
-              ? 'border-rose-300 text-rose-700'
-              : 'border-slate-300 text-slate-700',
+              ? 'border-rose-200 bg-rose-50 text-rose-800'
+              : 'border-sky-200 bg-sky-50 text-sky-800',
           ].join(' ')}
         >
           {alert.message}
         </div>
       )}
 
-      <section className="rounded border border-slate-300 p-4">
-        <h2 className="mb-4 text-base font-medium">{pageTitle}</h2>
+      <section className="rounded-[28px] border border-sky-100 bg-white p-6 shadow-[0_15px_40px_-24px_rgba(15,76,129,0.18)] md:p-7">
+        <div className="mb-6 flex flex-col gap-3 border-b border-sky-100 pb-5 md:flex-row md:items-center md:justify-between">
+          <div>
+            <h2 className="text-xl font-semibold text-[#0F4C81]">{pageTitle}</h2>
+            <p className="mt-1 text-sm text-slate-600">
+              Cree y edite precios para prestaciones según cobertura.
+            </p>
+          </div>
+
+          <div className="rounded-2xl border border-sky-100 bg-sky-50 px-4 py-3 text-sm text-slate-700">
+            <span className="font-semibold text-[#0F4C81]">División asignada:</span>{' '}
+            {selectedDivisionName}
+          </div>
+        </div>
 
         <form onSubmit={handleSubmit} className="grid gap-4 md:grid-cols-2">
           <div>
-            <label className="mb-1 block text-sm">División</label>
-            <select
-              value={form.divisionId}
-              onChange={(e) =>
-                setForm((prev) => ({
-                  ...prev,
-                  divisionId: e.target.value,
-                  procedureId: '',
-                  isapreId: '',
-                  isaprePlanId: '',
-                }))
-              }
-              disabled={loadingDivisions}
-              className="w-full rounded border border-slate-300 px-3 py-2"
-            >
-              <option value="">Seleccione división</option>
-              {divisions.map((division) => (
-                <option key={division.id} value={division.id}>
-                  {division.name}
-                </option>
-              ))}
-            </select>
+            <label className="mb-2 block text-[11px] font-bold uppercase tracking-[0.18em] text-[#0F4C81]">
+              División
+            </label>
+            <div className="w-full rounded-2xl border border-sky-100 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+              {selectedDivisionName}
+            </div>
           </div>
 
           <div>
@@ -587,7 +681,7 @@ export default function MaintainersPricesPage() {
                 }))
               }
               disabled={!form.divisionId || loadingProcedures}
-              className="w-full rounded border border-slate-300 px-3 py-2"
+              className="w-full rounded-2xl border border-sky-100 bg-white px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
             >
               <option value="">Seleccione prestación</option>
               {procedures.map((procedure) => (
@@ -603,12 +697,14 @@ export default function MaintainersPricesPage() {
             <select
               value={form.coverageType}
               onChange={(e) => handleCoverageTypeChange(e.target.value as CoverageType)}
-              className="w-full rounded border border-slate-300 px-3 py-2"
+              disabled={loadingCatalog || enabledCoverageOptions.length === 0}
+              className="w-full rounded-2xl border border-sky-100 bg-white px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-50"
             >
-              <option value="ISAPRE_PLAN">ISAPRE_PLAN</option>
-              <option value="FONASA">FONASA</option>
-              <option value="PARTICULAR">PARTICULAR</option>
-              <option value="OTHER">OTHER</option>
+              {enabledCoverageOptions.map((coverage) => (
+                <option key={coverage.type} value={coverage.type}>
+                  {coverage.label}
+                </option>
+              ))}
             </select>
           </div>
 
@@ -623,60 +719,60 @@ export default function MaintainersPricesPage() {
                   currency: e.target.value,
                 }))
               }
-              className="w-full rounded border border-slate-300 px-3 py-2"
+              className="w-full rounded-2xl border border-sky-100 bg-white px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
             />
           </div>
 
-          {form.coverageType === 'ISAPRE_PLAN' && (
-            <>
-              <div>
-                <label className="mb-1 block text-sm">Isapre</label>
-                <select
-                  value={form.isapreId}
-                  onChange={(e) =>
-                    setForm((prev) => ({
-                      ...prev,
-                      isapreId: e.target.value,
-                      isaprePlanId: '',
-                    }))
-                  }
-                  disabled={loadingIsapres}
-                  className="w-full rounded border border-slate-300 px-3 py-2"
-                >
-                  <option value="">Seleccione isapre</option>
-                  {isapres.map((isapre) => (
-                    <option key={isapre.id} value={isapre.id}>
-                      {isapre.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="mb-1 block text-sm">Plan</label>
-                <select
-                  value={form.isaprePlanId}
-                  onChange={(e) =>
-                    setForm((prev) => ({
-                      ...prev,
-                      isaprePlanId: e.target.value,
-                    }))
-                  }
-                  disabled={!form.isapreId || loadingPlans}
-                  className="w-full rounded border border-slate-300 px-3 py-2"
-                >
-                  <option value="">Seleccione plan</option>
-                  {plans.map((plan) => (
-                    <option key={plan.id} value={plan.id}>
-                      {plan.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </>
+          {selectedCoverageConfig?.requiresIsapre && (
+            <div>
+              <label className="mb-1 block text-sm">Isapre</label>
+              <select
+                value={form.isapreId}
+                onChange={(e) =>
+                  setForm((prev) => ({
+                    ...prev,
+                    isapreId: e.target.value,
+                    isaprePlanId: '',
+                  }))
+                }
+                disabled={loadingCatalog}
+                className="w-full rounded-2xl border border-sky-100 bg-white px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
+              >
+                <option value="">Seleccione isapre</option>
+                {isapres.map((isapre) => (
+                  <option key={isapre.id} value={isapre.id}>
+                    {isapre.name}
+                  </option>
+                ))}
+              </select>
+            </div>
           )}
 
-          {form.coverageType === 'FONASA' && (
+          {selectedCoverageConfig?.requiresPlan && (
+            <div>
+              <label className="mb-1 block text-sm">Plan</label>
+              <select
+                value={form.isaprePlanId}
+                onChange={(e) =>
+                  setForm((prev) => ({
+                    ...prev,
+                    isaprePlanId: e.target.value,
+                  }))
+                }
+                disabled={!form.isapreId || loadingPlans}
+                className="w-full rounded-2xl border border-sky-100 bg-white px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
+              >
+                <option value="">Seleccione plan</option>
+                {plans.map((plan) => (
+                  <option key={plan.id} value={plan.id}>
+                    {plan.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {selectedCoverageConfig?.requiresFonasaCode && (
             <div>
               <label className="mb-1 block text-sm">Código Fonasa</label>
               <input
@@ -688,12 +784,12 @@ export default function MaintainersPricesPage() {
                     fonasaCode: e.target.value,
                   }))
                 }
-                className="w-full rounded border border-slate-300 px-3 py-2"
+                className="w-full rounded-2xl border border-sky-100 bg-white px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
               />
             </div>
           )}
 
-          {(form.coverageType === 'PARTICULAR' || form.coverageType === 'OTHER') && (
+          {selectedCoverageConfig?.requiresPayerLabel && (
             <div>
               <label className="mb-1 block text-sm">Pagador</label>
               <input
@@ -705,7 +801,7 @@ export default function MaintainersPricesPage() {
                     payerLabel: e.target.value,
                   }))
                 }
-                className="w-full rounded border border-slate-300 px-3 py-2"
+                className="w-full rounded-2xl border border-sky-100 bg-white px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
               />
             </div>
           )}
@@ -722,7 +818,7 @@ export default function MaintainersPricesPage() {
                   price: e.target.value,
                 }))
               }
-              className="w-full rounded border border-slate-300 px-3 py-2"
+              className="w-full rounded-2xl border border-sky-100 bg-white px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
             />
           </div>
 
@@ -737,7 +833,7 @@ export default function MaintainersPricesPage() {
                   effectiveFrom: e.target.value,
                 }))
               }
-              className="w-full rounded border border-slate-300 px-3 py-2"
+              className="w-full rounded-2xl border border-sky-100 bg-white px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
             />
           </div>
 
@@ -752,7 +848,7 @@ export default function MaintainersPricesPage() {
                   effectiveTo: e.target.value,
                 }))
               }
-              className="w-full rounded border border-slate-300 px-3 py-2"
+              className="w-full rounded-2xl border border-sky-100 bg-white px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
             />
           </div>
 
@@ -760,7 +856,7 @@ export default function MaintainersPricesPage() {
             <button
               type="submit"
               disabled={savingPrice}
-              className="rounded border border-slate-900 bg-slate-900 px-4 py-2 text-sm text-white"
+              className="rounded-2xl bg-[#0F4C81] px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#0c3d67] disabled:cursor-not-allowed disabled:opacity-60"
             >
               {savingPrice
                 ? 'Guardando...'
@@ -772,7 +868,7 @@ export default function MaintainersPricesPage() {
             <button
               type="button"
               onClick={resetForm}
-              className="rounded border border-slate-300 px-4 py-2 text-sm"
+              className="rounded-2xl border border-sky-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 transition hover:bg-sky-50"
             >
               Limpiar
             </button>
@@ -780,24 +876,22 @@ export default function MaintainersPricesPage() {
         </form>
       </section>
 
-      <section className="rounded border border-slate-300 p-4">
-        <h2 className="mb-4 text-base font-medium">Listado</h2>
+      <section className="rounded-[28px] border border-sky-100 bg-white p-6 shadow-[0_15px_40px_-24px_rgba(15,76,129,0.18)] md:p-7">
+        <div className="mb-6 border-b border-sky-100 pb-5">
+          <h2 className="text-xl font-semibold text-[#0F4C81]">Listado</h2>
+          <p className="mt-1 text-sm text-slate-600">
+            Revise, filtre y administre los precios configurados para la división asignada.
+          </p>
+        </div>
 
         <div className="mb-4 grid gap-3 md:grid-cols-4">
           <div>
-            <label className="mb-1 block text-sm">División</label>
-            <select
-              value={selectedDivisionId}
-              onChange={(e) => setSelectedDivisionId(e.target.value)}
-              className="w-full rounded border border-slate-300 px-3 py-2"
-            >
-              <option value="">Seleccione división</option>
-              {divisions.map((division) => (
-                <option key={division.id} value={division.id}>
-                  {division.name}
-                </option>
-              ))}
-            </select>
+            <label className="mb-2 block text-[11px] font-bold uppercase tracking-[0.18em] text-[#0F4C81]">
+              División
+            </label>
+            <div className="w-full rounded-2xl border border-sky-100 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+              {selectedDivisionName}
+            </div>
           </div>
 
           <div>
@@ -806,7 +900,7 @@ export default function MaintainersPricesPage() {
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="w-full rounded border border-slate-300 px-3 py-2"
+              className="w-full rounded-2xl border border-sky-100 bg-white px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
               placeholder="Prestación, código o pagador"
             />
           </div>
@@ -816,13 +910,14 @@ export default function MaintainersPricesPage() {
             <select
               value={coverageTypeFilter}
               onChange={(e) => setCoverageTypeFilter(e.target.value)}
-              className="w-full rounded border border-slate-300 px-3 py-2"
+              className="w-full rounded-2xl border border-sky-100 bg-white px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
             >
               <option value="">Todas</option>
-              <option value="ISAPRE_PLAN">ISAPRE_PLAN</option>
-              <option value="FONASA">FONASA</option>
-              <option value="PARTICULAR">PARTICULAR</option>
-              <option value="OTHER">OTHER</option>
+              {enabledCoverageOptions.map((coverage) => (
+                <option key={coverage.type} value={coverage.type}>
+                  {coverage.label}
+                </option>
+              ))}
             </select>
           </div>
 
@@ -831,7 +926,7 @@ export default function MaintainersPricesPage() {
             <select
               value={activeFilter}
               onChange={(e) => setActiveFilter(e.target.value)}
-              className="w-full rounded border border-slate-300 px-3 py-2"
+              className="w-full rounded-2xl border border-sky-100 bg-white px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
             >
               <option value="">Todos</option>
               <option value="true">Activos</option>
@@ -844,71 +939,78 @@ export default function MaintainersPricesPage() {
           <button
             type="button"
             onClick={loadPrices}
-            className="rounded border border-slate-900 px-4 py-2 text-sm"
+            className="rounded-2xl border border-sky-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 transition hover:bg-sky-50"
           >
             Buscar
           </button>
         </div>
 
         {loadingPrices ? (
-          <div>Cargando precios...</div>
+          <div className="rounded-2xl border border-dashed border-sky-200 bg-sky-50 px-4 py-6 text-sm text-slate-600">
+            Cargando precios...
+          </div>
         ) : prices.length === 0 ? (
-          <div>No hay precios para los filtros seleccionados.</div>
+          <div className="rounded-2xl border border-dashed border-sky-200 bg-sky-50 px-4 py-6 text-sm text-slate-600">
+            No hay precios para los filtros seleccionados.
+          </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="min-w-full border-collapse border border-slate-300 text-sm">
+          <div className="overflow-x-auto rounded-2xl border border-sky-100">
+            <table className="min-w-full border-collapse text-sm">
               <thead>
                 <tr>
-                  <th className="border border-slate-300 px-3 py-2 text-left">ID</th>
-                  <th className="border border-slate-300 px-3 py-2 text-left">División</th>
-                  <th className="border border-slate-300 px-3 py-2 text-left">Prestación</th>
-                  <th className="border border-slate-300 px-3 py-2 text-left">Cobertura</th>
-                  <th className="border border-slate-300 px-3 py-2 text-left">Isapre</th>
-                  <th className="border border-slate-300 px-3 py-2 text-left">Plan</th>
-                  <th className="border border-slate-300 px-3 py-2 text-left">Pagador / Fonasa</th>
-                  <th className="border border-slate-300 px-3 py-2 text-left">Precio</th>
-                  <th className="border border-slate-300 px-3 py-2 text-left">Vigencia</th>
-                  <th className="border border-slate-300 px-3 py-2 text-left">Activo</th>
-                  <th className="border border-slate-300 px-3 py-2 text-left">Acciones</th>
+                  <th className="border-b border-sky-100 bg-sky-50 px-4 py-3 text-left text-xs font-bold uppercase tracking-[0.14em] text-[#0F4C81]">ID</th>
+                  <th className="border-b border-sky-100 bg-sky-50 px-4 py-3 text-left text-xs font-bold uppercase tracking-[0.14em] text-[#0F4C81]">División</th>
+                  <th className="border-b border-sky-100 bg-sky-50 px-4 py-3 text-left text-xs font-bold uppercase tracking-[0.14em] text-[#0F4C81]">Prestación</th>
+                  <th className="border-b border-sky-100 bg-sky-50 px-4 py-3 text-left text-xs font-bold uppercase tracking-[0.14em] text-[#0F4C81]">Cobertura</th>
+                  <th className="border-b border-sky-100 bg-sky-50 px-4 py-3 text-left text-xs font-bold uppercase tracking-[0.14em] text-[#0F4C81]">Isapre</th>
+                  <th className="border-b border-sky-100 bg-sky-50 px-4 py-3 text-left text-xs font-bold uppercase tracking-[0.14em] text-[#0F4C81]">Plan</th>
+                  <th className="border-b border-sky-100 bg-sky-50 px-4 py-3 text-left text-xs font-bold uppercase tracking-[0.14em] text-[#0F4C81]">Pagador / Fonasa</th>
+                  <th className="border-b border-sky-100 bg-sky-50 px-4 py-3 text-left text-xs font-bold uppercase tracking-[0.14em] text-[#0F4C81]">Precio</th>
+                  <th className="border-b border-sky-100 bg-sky-50 px-4 py-3 text-left text-xs font-bold uppercase tracking-[0.14em] text-[#0F4C81]">Vigencia</th>
+                  <th className="border-b border-sky-100 bg-sky-50 px-4 py-3 text-left text-xs font-bold uppercase tracking-[0.14em] text-[#0F4C81]">Activo</th>
+                  <th className="border-b border-sky-100 bg-sky-50 px-4 py-3 text-left text-xs font-bold uppercase tracking-[0.14em] text-[#0F4C81]">Acciones</th>
                 </tr>
               </thead>
               <tbody>
                 {prices.map((price) => (
                   <tr key={price.id}>
-                    <td className="border border-slate-300 px-3 py-2">{price.id}</td>
-                    <td className="border border-slate-300 px-3 py-2">
+                    <td className="border-b border-sky-50 px-4 py-3 text-slate-700">{price.id}</td>
+                    <td className="border-b border-sky-50 px-4 py-3 text-slate-700">
                       {price.division?.name ?? price.divisionId}
                     </td>
-                    <td className="border border-slate-300 px-3 py-2">
+                    <td className="border-b border-sky-50 px-4 py-3 text-slate-700">
                       {price.procedure
                         ? `${price.procedure.code} - ${price.procedure.name}`
                         : price.procedureId}
                     </td>
-                    <td className="border border-slate-300 px-3 py-2">{price.coverageType}</td>
-                    <td className="border border-slate-300 px-3 py-2">
+                    <td className="border-b border-sky-50 px-4 py-3 text-slate-700">
+                      {coverageCatalog.find((item) => item.type === price.coverageType)?.label ??
+                        price.coverageType}
+                    </td>
+                    <td className="border-b border-sky-50 px-4 py-3 text-slate-700">
                       {price.isapre?.name ?? '-'}
                     </td>
-                    <td className="border border-slate-300 px-3 py-2">
+                    <td className="border-b border-sky-50 px-4 py-3 text-slate-700">
                       {price.isaprePlan?.name ?? '-'}
                     </td>
-                    <td className="border border-slate-300 px-3 py-2">
+                    <td className="border-b border-sky-50 px-4 py-3 text-slate-700">
                       {price.fonasaCode ?? price.payerLabel ?? '-'}
                     </td>
-                    <td className="border border-slate-300 px-3 py-2">
+                    <td className="border-b border-sky-50 px-4 py-3 text-slate-700">
                       {formatCurrency(price.price)}
                     </td>
-                    <td className="border border-slate-300 px-3 py-2">
+                    <td className="border-b border-sky-50 px-4 py-3 text-slate-700">
                       {formatDateInput(price.effectiveFrom) || '-'} / {formatDateInput(price.effectiveTo) || '-'}
                     </td>
-                    <td className="border border-slate-300 px-3 py-2">
+                    <td className="border-b border-sky-50 px-4 py-3 text-slate-700">
                       {price.active ? 'Sí' : 'No'}
                     </td>
-                    <td className="border border-slate-300 px-3 py-2">
+                    <td className="border-b border-sky-50 px-4 py-3 text-slate-700">
                       <div className="flex gap-2">
                         <button
                           type="button"
                           onClick={() => handleEdit(price)}
-                          className="rounded border border-slate-300 px-3 py-1"
+                          className="rounded-xl border border-sky-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-sky-50"
                         >
                           Editar
                         </button>
@@ -917,7 +1019,7 @@ export default function MaintainersPricesPage() {
                           type="button"
                           onClick={() => handleToggleStatus(price)}
                           disabled={updatingStatusId === price.id}
-                          className="rounded border border-slate-300 px-3 py-1"
+                          className="rounded-xl border border-sky-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-60"
                         >
                           {updatingStatusId === price.id
                             ? 'Actualizando...'

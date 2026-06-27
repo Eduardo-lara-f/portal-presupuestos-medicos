@@ -38,6 +38,20 @@ type ProcedureFormState = {
   careType: CareType;
 };
 
+type AuthUser = {
+  id: number;
+  name: string;
+  email: string;
+  role: string;
+  status: boolean;
+  divisionId?: number | null;
+  division?: {
+    id: number;
+    name: string;
+    code?: string;
+  } | null;
+};
+
 type AlertState = {
   type: 'success' | 'error' | 'info';
   message: string;
@@ -62,6 +76,8 @@ export default function MaintainersProceduresPage() {
   const [updatingStatusId, setUpdatingStatusId] = useState<number | null>(null);
 
   const [selectedDivisionId, setSelectedDivisionId] = useState('');
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [selectedDivisionName, setSelectedDivisionName] = useState('-');
   const [search, setSearch] = useState('');
   const [careTypeFilter, setCareTypeFilter] = useState<string>('');
   const [activeFilter, setActiveFilter] = useState<string>('true');
@@ -79,6 +95,32 @@ export default function MaintainersProceduresPage() {
   }, [alert]);
 
   useEffect(() => {
+    try {
+      const rawAuthUser = localStorage.getItem('authUser');
+      if (!rawAuthUser) return;
+
+      const parsedAuthUser = JSON.parse(rawAuthUser) as AuthUser;
+      setAuthUser(parsedAuthUser);
+
+      const divisionId =
+        parsedAuthUser?.divisionId ?? parsedAuthUser?.division?.id ?? null;
+      const divisionName = parsedAuthUser?.division?.name ?? '-';
+
+      if (typeof divisionId === 'number') {
+        const nextDivisionId = String(divisionId);
+        setSelectedDivisionId(nextDivisionId);
+        setSelectedDivisionName(divisionName);
+        setForm((prev) => ({
+          ...prev,
+          divisionId: nextDivisionId,
+        }));
+      }
+    } catch (error) {
+      console.error(error);
+    }
+  }, []);
+
+  useEffect(() => {
     async function loadDivisions() {
       try {
         setLoadingDivisions(true);
@@ -91,12 +133,14 @@ export default function MaintainersProceduresPage() {
         const data: Division[] = await response.json();
         setDivisions(data);
 
-        if (data.length > 0) {
-          setSelectedDivisionId(String(data[0].id));
-          setForm((prev) => ({
-            ...prev,
-            divisionId: String(data[0].id),
-          }));
+        if (selectedDivisionId) {
+          const currentDivision = data.find(
+            (division) => String(division.id) === selectedDivisionId,
+          );
+
+          if (currentDivision) {
+            setSelectedDivisionName(currentDivision.name);
+          }
         }
       } catch (error) {
         console.error(error);
@@ -110,7 +154,7 @@ export default function MaintainersProceduresPage() {
     }
 
     loadDivisions();
-  }, []);
+  }, [selectedDivisionId]);
 
   useEffect(() => {
     if (!selectedDivisionId) return;
@@ -173,7 +217,7 @@ export default function MaintainersProceduresPage() {
   function handleEdit(procedure: Procedure) {
     setEditingProcedureId(procedure.id);
     setForm({
-      divisionId: String(procedure.divisionId),
+      divisionId: selectedDivisionId || String(procedure.divisionId),
       code: procedure.code,
       name: procedure.name,
       description: procedure.description ?? '',
@@ -185,6 +229,13 @@ export default function MaintainersProceduresPage() {
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
+    if (!selectedDivisionId) {
+      setAlert({
+        type: 'error',
+        message: 'No se pudo identificar la división asignada del usuario.',
+      });
+      return;
+    }
     if (!form.divisionId || !form.code.trim() || !form.name.trim()) {
       setAlert({
         type: 'info',
@@ -197,7 +248,7 @@ export default function MaintainersProceduresPage() {
       setSavingProcedure(true);
 
       const payload = {
-        divisionId: Number(form.divisionId),
+        divisionId: Number(selectedDivisionId),
         code: form.code.trim(),
         name: form.name.trim(),
         description: form.description.trim() || undefined,
@@ -286,9 +337,13 @@ export default function MaintainersProceduresPage() {
   }, [editingProcedureId]);
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-xl font-semibold">Mantenedor de prestaciones</h1>
+    <div className="mx-auto w-full max-w-7xl space-y-6 px-6 pt-6 md:px-10 lg:px-14 xl:px-20 2xl:px-24">
+      <div className="space-y-3 text-center">
+        <h1 className="text-2xl font-semibold md:text-3xl">Mantenedor de prestaciones</h1>
+        <div className="mx-auto max-w-4xl rounded border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-slate-700 shadow-sm md:text-base">
+          <span className="font-semibold text-[#0F4C81]">División asignada:</span>{' '}
+          {selectedDivisionName}
+        </div>
       </div>
 
       {alert && (
@@ -306,30 +361,18 @@ export default function MaintainersProceduresPage() {
         </div>
       )}
 
-      <section className="rounded border border-slate-300 p-4">
+      <section className="mx-auto w-full max-w-5xl rounded-2xl border border-slate-300 bg-white p-4 shadow-sm md:p-5 lg:p-6">
         <h2 className="mb-4 text-base font-medium">{pageTitle}</h2>
 
         <form onSubmit={handleSubmit} className="grid gap-4 md:grid-cols-2">
           <div>
             <label className="mb-1 block text-sm">División</label>
-            <select
-              value={form.divisionId}
-              onChange={(e) =>
-                setForm((prev) => ({
-                  ...prev,
-                  divisionId: e.target.value,
-                }))
-              }
-              disabled={loadingDivisions}
-              className="w-full rounded border border-slate-300 px-3 py-2"
-            >
-              <option value="">Seleccione división</option>
-              {divisions.map((division) => (
-                <option key={division.id} value={division.id}>
-                  {division.name}
-                </option>
-              ))}
-            </select>
+            <input
+              type="text"
+              value={selectedDivisionName}
+              disabled
+              className="w-full rounded border border-slate-300 bg-slate-50 px-3 py-2 text-slate-700"
+            />
           </div>
 
           <div>
@@ -434,26 +477,10 @@ export default function MaintainersProceduresPage() {
         </form>
       </section>
 
-      <section className="rounded border border-slate-300 p-4">
+      <section className="mx-auto w-full max-w-6xl rounded-2xl border border-slate-300 bg-white p-4 shadow-sm md:p-5 lg:p-6">
         <h2 className="mb-4 text-base font-medium">Listado</h2>
 
-        <div className="mb-4 grid gap-3 md:grid-cols-4">
-          <div>
-            <label className="mb-1 block text-sm">División</label>
-            <select
-              value={selectedDivisionId}
-              onChange={(e) => setSelectedDivisionId(e.target.value)}
-              className="w-full rounded border border-slate-300 px-3 py-2"
-            >
-              <option value="">Seleccione división</option>
-              {divisions.map((division) => (
-                <option key={division.id} value={division.id}>
-                  {division.name}
-                </option>
-              ))}
-            </select>
-          </div>
-
+        <div className="mb-4 grid gap-3 md:grid-cols-3">
           <div>
             <label className="mb-1 block text-sm">Buscar</label>
             <input

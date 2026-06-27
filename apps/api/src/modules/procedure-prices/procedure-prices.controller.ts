@@ -39,6 +39,11 @@ export class ProcedurePricesController {
     });
   }
 
+  @Get('catalog')
+  async getCatalog(@Query('divisionId', ParseIntPipe) divisionId: number) {
+    return this.procedurePricesService.getCatalog(divisionId);
+  }
+
   @Get()
   async findAll(
     @Query('divisionId') divisionId?: string,

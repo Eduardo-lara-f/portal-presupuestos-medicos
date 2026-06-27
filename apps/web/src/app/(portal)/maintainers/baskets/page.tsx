@@ -452,335 +452,380 @@ export default function MaintainersBasketsPage() {
   }
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-xl font-semibold">Mantenedor de canastas</h1>
-      </div>
-
-      {alert && (
-        <div
-          className={[
-            'rounded border px-3 py-2 text-sm',
-            alert.type === 'success'
-              ? 'border-emerald-300 text-emerald-700'
-              : alert.type === 'error'
-              ? 'border-rose-300 text-rose-700'
-              : 'border-slate-300 text-slate-700',
-          ].join(' ')}
-        >
-          {alert.message}
-        </div>
-      )}
-
-      <section className="rounded border border-slate-300 p-4">
-        <h2 className="mb-4 text-base font-medium">{pageTitle}</h2>
-
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="grid gap-4 md:grid-cols-2">
-            <div>
-              <label className="mb-1 block text-sm">División</label>
-              <select
-                value={form.divisionId}
-                onChange={(e) =>
-                  setForm((prev) => ({
-                    ...prev,
-                    divisionId: e.target.value,
-                    items: [],
-                  }))
-                }
-                disabled={loadingDivisions}
-                className="w-full rounded border border-slate-300 px-3 py-2"
-              >
-                <option value="">Seleccione división</option>
-                {divisions.map((division) => (
-                  <option key={division.id} value={division.id}>
-                    {division.name}
-                  </option>
-                ))}
-              </select>
+    <main className="min-h-screen bg-gradient-to-br from-sky-50 via-white to-cyan-50">
+      <div className="mx-auto w-full max-w-[1400px] px-4 py-6 md:px-8 xl:px-12">
+        <div className="mx-auto max-w-5xl space-y-6">
+          <div className="text-center">
+            <div className="inline-flex rounded-full border border-sky-200 bg-white px-4 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-sky-700 shadow-sm">
+              Configuración clínica
             </div>
-
-            <div>
-              <label className="mb-1 block text-sm">Código</label>
-              <input
-                type="text"
-                value={form.code}
-                onChange={(e) =>
-                  setForm((prev) => ({
-                    ...prev,
-                    code: e.target.value,
-                  }))
-                }
-                className="w-full rounded border border-slate-300 px-3 py-2"
-              />
-            </div>
-
-            <div>
-              <label className="mb-1 block text-sm">Nombre</label>
-              <input
-                type="text"
-                value={form.name}
-                onChange={(e) =>
-                  setForm((prev) => ({
-                    ...prev,
-                    name: e.target.value,
-                  }))
-                }
-                className="w-full rounded border border-slate-300 px-3 py-2"
-              />
-            </div>
-
-            <div>
-              <label className="mb-1 block text-sm">Descripción</label>
-              <input
-                type="text"
-                value={form.description}
-                onChange={(e) =>
-                  setForm((prev) => ({
-                    ...prev,
-                    description: e.target.value,
-                  }))
-                }
-                className="w-full rounded border border-slate-300 px-3 py-2"
-              />
-            </div>
+            <h1 className="mt-3 text-3xl font-bold tracking-tight text-[#0F4C81]">
+              Mantenedor de canastas
+            </h1>
+            <p className="mt-2 text-sm text-slate-600">
+              Administre canastas por división y configure sus prestaciones asociadas.
+            </p>
           </div>
 
-          <div className="rounded border border-slate-300 p-4">
-            <h3 className="mb-3 text-sm font-medium">Prestaciones de la canasta</h3>
+          {alert && (
+            <div
+              className={[
+                'rounded-2xl border px-4 py-3 text-sm shadow-sm',
+                alert.type === 'success'
+                  ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                  : alert.type === 'error'
+                  ? 'border-rose-200 bg-rose-50 text-rose-700'
+                  : 'border-sky-200 bg-sky-50 text-sky-700',
+              ].join(' ')}
+            >
+              {alert.message}
+            </div>
+          )}
 
-            <div className="mb-4 grid gap-3 md:grid-cols-[1fr_auto]">
-              <select
-                value={procedureToAdd}
-                onChange={(e) => setProcedureToAdd(e.target.value)}
-                disabled={!form.divisionId || loadingProcedures}
-                className="w-full rounded border border-slate-300 px-3 py-2"
-              >
-                <option value="">Seleccione prestación</option>
-                {procedureOptions.map((procedure) => (
-                  <option key={procedure.id} value={procedure.id}>
-                    {procedure.code} - {procedure.name}
-                  </option>
-                ))}
-              </select>
+          <section className="rounded-[28px] border border-sky-100 bg-white p-5 shadow-[0_15px_40px_-24px_rgba(15,76,129,0.28)] md:p-6">
+            <div className="mb-5 flex items-center justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-semibold text-[#0F4C81]">{pageTitle}</h2>
+                <p className="mt-1 text-sm text-slate-600">
+                  Complete los datos principales y agregue las prestaciones que compondrán la canasta.
+                </p>
+              </div>
+            </div>
 
+            <form onSubmit={handleSubmit} className="space-y-5">
+              <div className="grid gap-4 md:grid-cols-2">
+                <Field label="División">
+                  <select
+                    value={form.divisionId}
+                    onChange={(e) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        divisionId: e.target.value,
+                        items: [],
+                      }))
+                    }
+                    disabled={loadingDivisions}
+                    className="input-clinical"
+                  >
+                    <option value="">Seleccione división</option>
+                    {divisions.map((division) => (
+                      <option key={division.id} value={division.id}>
+                        {division.name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+
+                <Field label="Código">
+                  <input
+                    type="text"
+                    value={form.code}
+                    onChange={(e) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        code: e.target.value,
+                      }))
+                    }
+                    className="input-clinical"
+                  />
+                </Field>
+
+                <Field label="Nombre">
+                  <input
+                    type="text"
+                    value={form.name}
+                    onChange={(e) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        name: e.target.value,
+                      }))
+                    }
+                    className="input-clinical"
+                  />
+                </Field>
+
+                <Field label="Descripción">
+                  <input
+                    type="text"
+                    value={form.description}
+                    onChange={(e) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        description: e.target.value,
+                      }))
+                    }
+                    className="input-clinical"
+                  />
+                </Field>
+              </div>
+
+              <div className="rounded-[24px] border border-sky-100 bg-sky-50/60 p-4 md:p-5">
+                <div className="mb-4">
+                  <h3 className="text-base font-semibold text-[#0F4C81]">Prestaciones de la canasta</h3>
+                  <p className="mt-1 text-sm text-slate-600">
+                    Agregue una o más prestaciones, defina cantidad y un puntaje de relevancia si corresponde.
+                  </p>
+                </div>
+
+                <div className="mb-4 grid gap-3 md:grid-cols-[1fr_auto]">
+                  <select
+                    value={procedureToAdd}
+                    onChange={(e) => setProcedureToAdd(e.target.value)}
+                    disabled={!form.divisionId || loadingProcedures}
+                    className="input-clinical"
+                  >
+                    <option value="">Seleccione prestación</option>
+                    {procedureOptions.map((procedure) => (
+                      <option key={procedure.id} value={procedure.id}>
+                        {procedure.code} - {procedure.name}
+                      </option>
+                    ))}
+                  </select>
+
+                  <button
+                    type="button"
+                    onClick={addProcedureToForm}
+                    className="btn-health-primary"
+                  >
+                    Agregar
+                  </button>
+                </div>
+
+                {form.items.length === 0 ? (
+                  <div className="rounded-2xl border border-dashed border-sky-200 bg-white px-4 py-4 text-sm text-slate-500">
+                    No hay prestaciones agregadas.
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {form.items.map((item, index) => (
+                      <div
+                        key={`${item.procedureId}-${index}`}
+                        className="grid gap-3 rounded-2xl border border-sky-100 bg-white p-4 md:grid-cols-[2fr_120px_160px_auto]"
+                      >
+                        <div className="flex items-center text-sm font-medium text-slate-700">
+                          {getProcedureLabel(item.procedureId)}
+                        </div>
+
+                        <input
+                          type="number"
+                          min={1}
+                          value={item.quantity}
+                          onChange={(e) =>
+                            updateFormItem(index, 'quantity', e.target.value)
+                          }
+                          className="input-clinical"
+                          placeholder="Cantidad"
+                        />
+
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={item.relevanceScore}
+                          onChange={(e) =>
+                            updateFormItem(index, 'relevanceScore', e.target.value)
+                          }
+                          className="input-clinical"
+                          placeholder="Relevancia"
+                        />
+
+                        <button
+                          type="button"
+                          onClick={() => removeFormItem(index)}
+                          className="btn-health-secondary"
+                        >
+                          Quitar
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="flex flex-wrap gap-3">
+                <button
+                  type="submit"
+                  disabled={savingBasket}
+                  className="btn-health-primary"
+                >
+                  {savingBasket
+                    ? 'Guardando...'
+                    : editingBasketId
+                    ? 'Actualizar'
+                    : 'Crear'}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={resetForm}
+                  className="btn-health-secondary"
+                >
+                  Limpiar
+                </button>
+              </div>
+            </form>
+          </section>
+
+          <section className="rounded-[28px] border border-sky-100 bg-white p-5 shadow-[0_15px_40px_-24px_rgba(15,76,129,0.28)] md:p-6">
+            <div className="mb-5">
+              <h2 className="text-lg font-semibold text-[#0F4C81]">Listado</h2>
+              <p className="mt-1 text-sm text-slate-600">
+                Filtre las canastas por división, búsqueda libre o estado.
+              </p>
+            </div>
+
+            <div className="mb-4 grid gap-4 md:grid-cols-3">
+              <Field label="División">
+                <select
+                  value={selectedDivisionId}
+                  onChange={(e) => setSelectedDivisionId(e.target.value)}
+                  className="input-clinical"
+                >
+                  <option value="">Seleccione división</option>
+                  {divisions.map((division) => (
+                    <option key={division.id} value={division.id}>
+                      {division.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+
+              <Field label="Buscar">
+                <input
+                  type="text"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  className="input-clinical"
+                  placeholder="Código o nombre"
+                />
+              </Field>
+
+              <Field label="Estado">
+                <select
+                  value={activeFilter}
+                  onChange={(e) => setActiveFilter(e.target.value)}
+                  className="input-clinical"
+                >
+                  <option value="">Todos</option>
+                  <option value="true">Activas</option>
+                  <option value="false">Inactivas</option>
+                </select>
+              </Field>
+            </div>
+
+            <div className="mb-5">
               <button
                 type="button"
-                onClick={addProcedureToForm}
-                className="rounded border border-slate-900 px-4 py-2 text-sm"
+                onClick={loadBaskets}
+                className="btn-health-primary"
               >
-                Agregar
+                Buscar
               </button>
             </div>
 
-            {form.items.length === 0 ? (
-              <div className="text-sm text-slate-500">
-                No hay prestaciones agregadas.
+            {loadingBaskets ? (
+              <div className="rounded-2xl border border-sky-100 bg-sky-50 px-4 py-6 text-sm text-slate-600">
+                Cargando canastas...
+              </div>
+            ) : baskets.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-sky-200 bg-sky-50/60 px-4 py-6 text-sm text-slate-500">
+                No hay canastas para los filtros seleccionados.
               </div>
             ) : (
-              <div className="space-y-3">
-                {form.items.map((item, index) => (
+              <div className="space-y-4">
+                {baskets.map((basket) => (
                   <div
-                    key={`${item.procedureId}-${index}`}
-                    className="grid gap-3 rounded border border-slate-200 p-3 md:grid-cols-[2fr_120px_160px_auto]"
+                    key={basket.id}
+                    className="rounded-[24px] border border-sky-100 bg-sky-50/40 p-4 shadow-sm"
                   >
-                    <div className="flex items-center text-sm">
-                      {getProcedureLabel(item.procedureId)}
+                    <div className="mb-4 flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                      <div>
+                        <div className="text-sm font-medium text-sky-700">
+                          {basket.division?.name ?? basket.divisionId}
+                        </div>
+                        <div className="mt-1 text-lg font-semibold text-slate-900">
+                          {basket.code} - {basket.name}
+                        </div>
+                        <div className="mt-1 text-sm text-slate-600">
+                          {basket.description ?? 'Sin descripción'}
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleEdit(basket)}
+                          className="btn-health-secondary"
+                        >
+                          Editar
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleToggleStatus(basket)}
+                          disabled={updatingStatusId === basket.id}
+                          className="btn-health-secondary"
+                        >
+                          {updatingStatusId === basket.id
+                            ? 'Actualizando...'
+                            : basket.active
+                            ? 'Desactivar'
+                            : 'Activar'}
+                        </button>
+                      </div>
                     </div>
 
-                    <input
-                      type="number"
-                      min={1}
-                      value={item.quantity}
-                      onChange={(e) =>
-                        updateFormItem(index, 'quantity', e.target.value)
-                      }
-                      className="rounded border border-slate-300 px-3 py-2"
-                      placeholder="Cantidad"
-                    />
-
-                    <input
-                      type="number"
-                      step="0.01"
-                      value={item.relevanceScore}
-                      onChange={(e) =>
-                        updateFormItem(index, 'relevanceScore', e.target.value)
-                      }
-                      className="rounded border border-slate-300 px-3 py-2"
-                      placeholder="Relevancia"
-                    />
-
-                    <button
-                      type="button"
-                      onClick={() => removeFormItem(index)}
-                      className="rounded border border-slate-300 px-3 py-2 text-sm"
-                    >
-                      Quitar
-                    </button>
+                    <div className="text-sm">
+                      <div className="mb-2 font-semibold text-[#0F4C81]">Prestaciones</div>
+                      {basket.items.length === 0 ? (
+                        <div className="rounded-2xl border border-dashed border-sky-200 bg-white px-4 py-3 text-slate-500">
+                          Sin prestaciones.
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          {basket.items.map((item, index) => (
+                            <div
+                              key={`${basket.id}-${item.procedureId}-${index}`}
+                              className="rounded-2xl border border-sky-100 bg-white px-4 py-3"
+                            >
+                              <div className="font-medium text-slate-800">
+                                {item.procedure?.code} - {item.procedure?.name}
+                              </div>
+                              <div className="mt-1 text-slate-500">
+                                Cantidad: {item.quantity}
+                                {item.relevanceScore !== undefined &&
+                                item.relevanceScore !== null
+                                  ? ` · Relevancia: ${item.relevanceScore}`
+                                  : ''}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>
             )}
-          </div>
-
-          <div className="flex gap-2">
-            <button
-              type="submit"
-              disabled={savingBasket}
-              className="rounded border border-slate-900 bg-slate-900 px-4 py-2 text-sm text-white"
-            >
-              {savingBasket
-                ? 'Guardando...'
-                : editingBasketId
-                ? 'Actualizar'
-                : 'Crear'}
-            </button>
-
-            <button
-              type="button"
-              onClick={resetForm}
-              className="rounded border border-slate-300 px-4 py-2 text-sm"
-            >
-              Limpiar
-            </button>
-          </div>
-        </form>
-      </section>
-
-      <section className="rounded border border-slate-300 p-4">
-        <h2 className="mb-4 text-base font-medium">Listado</h2>
-
-        <div className="mb-4 grid gap-3 md:grid-cols-3">
-          <div>
-            <label className="mb-1 block text-sm">División</label>
-            <select
-              value={selectedDivisionId}
-              onChange={(e) => setSelectedDivisionId(e.target.value)}
-              className="w-full rounded border border-slate-300 px-3 py-2"
-            >
-              <option value="">Seleccione división</option>
-              {divisions.map((division) => (
-                <option key={division.id} value={division.id}>
-                  {division.name}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label className="mb-1 block text-sm">Buscar</label>
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="w-full rounded border border-slate-300 px-3 py-2"
-              placeholder="Código o nombre"
-            />
-          </div>
-
-          <div>
-            <label className="mb-1 block text-sm">Estado</label>
-            <select
-              value={activeFilter}
-              onChange={(e) => setActiveFilter(e.target.value)}
-              className="w-full rounded border border-slate-300 px-3 py-2"
-            >
-              <option value="">Todos</option>
-              <option value="true">Activas</option>
-              <option value="false">Inactivas</option>
-            </select>
-          </div>
+          </section>
         </div>
+      </div>
+    </main>
+  );
+}
 
-        <div className="mb-4">
-          <button
-            type="button"
-            onClick={loadBaskets}
-            className="rounded border border-slate-900 px-4 py-2 text-sm"
-          >
-            Buscar
-          </button>
-        </div>
-
-        {loadingBaskets ? (
-          <div>Cargando canastas...</div>
-        ) : baskets.length === 0 ? (
-          <div>No hay canastas para los filtros seleccionados.</div>
-        ) : (
-          <div className="space-y-4">
-            {baskets.map((basket) => (
-              <div
-                key={basket.id}
-                className="rounded border border-slate-300 p-4"
-              >
-                <div className="mb-3 flex items-start justify-between gap-4">
-                  <div>
-                    <div className="text-sm text-slate-500">
-                      {basket.division?.name ?? basket.divisionId}
-                    </div>
-                    <div className="text-base font-semibold">
-                      {basket.code} - {basket.name}
-                    </div>
-                    <div className="text-sm text-slate-600">
-                      {basket.description ?? 'Sin descripción'}
-                    </div>
-                  </div>
-
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => handleEdit(basket)}
-                      className="rounded border border-slate-300 px-3 py-1 text-sm"
-                    >
-                      Editar
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => handleToggleStatus(basket)}
-                      disabled={updatingStatusId === basket.id}
-                      className="rounded border border-slate-300 px-3 py-1 text-sm"
-                    >
-                      {updatingStatusId === basket.id
-                        ? 'Actualizando...'
-                        : basket.active
-                        ? 'Desactivar'
-                        : 'Activar'}
-                    </button>
-                  </div>
-                </div>
-
-                <div className="text-sm">
-                  <div className="mb-2 font-medium">Prestaciones:</div>
-                  {basket.items.length === 0 ? (
-                    <div className="text-slate-500">Sin prestaciones.</div>
-                  ) : (
-                    <div className="space-y-2">
-                      {basket.items.map((item, index) => (
-                        <div
-                          key={`${basket.id}-${item.procedureId}-${index}`}
-                          className="rounded border border-slate-200 px-3 py-2"
-                        >
-                          <div>
-                            {item.procedure?.code} - {item.procedure?.name}
-                          </div>
-                          <div className="text-slate-500">
-                            Cantidad: {item.quantity}
-                            {item.relevanceScore !== undefined &&
-                            item.relevanceScore !== null
-                              ? ` · Relevancia: ${item.relevanceScore}`
-                              : ''}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
-    </div>
+function Field({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <label className="block">
+      <span className="mb-2 block text-[11px] font-bold uppercase tracking-[0.18em] text-[#0F4C81]">
+        {label}
+      </span>
+      {children}
+    </label>
   );
 }

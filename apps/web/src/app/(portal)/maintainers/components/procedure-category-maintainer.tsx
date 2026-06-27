@@ -5,7 +5,22 @@ import React, { FormEvent, useEffect, useMemo, useState } from 'react';
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 
 type CareType = 'AMBULATORY' | 'SURGICAL' | 'BOTH';
+
 type ProcedureCategory = 'SUPPLY' | 'DRUG' | 'BED';
+
+type AuthUser = {
+  id: number;
+  name: string;
+  email: string;
+  role: string;
+  status: boolean;
+  divisionId?: number | null;
+  division?: {
+    id: number;
+    name: string;
+    code?: string;
+  } | null;
+};
 
 type Division = {
   id: number;
@@ -67,12 +82,15 @@ export default function ProcedureCategoryMaintainer({
   const [divisions, setDivisions] = useState<Division[]>([]);
   const [items, setItems] = useState<Procedure[]>([]);
 
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [selectedDivisionId, setSelectedDivisionId] = useState('');
+  const [selectedDivisionName, setSelectedDivisionName] = useState('-');
+
   const [loadingDivisions, setLoadingDivisions] = useState(false);
   const [loadingItems, setLoadingItems] = useState(false);
   const [savingItem, setSavingItem] = useState(false);
   const [updatingStatusId, setUpdatingStatusId] = useState<number | null>(null);
 
-  const [selectedDivisionId, setSelectedDivisionId] = useState('');
   const [search, setSearch] = useState('');
   const [careTypeFilter, setCareTypeFilter] = useState('');
   const [activeFilter, setActiveFilter] = useState('true');
@@ -89,7 +107,39 @@ export default function ProcedureCategoryMaintainer({
   }, [alert]);
 
   useEffect(() => {
+    try {
+      const rawAuthUser = localStorage.getItem('authUser');
+      if (!rawAuthUser) return;
+
+      const parsedAuthUser = JSON.parse(rawAuthUser) as AuthUser;
+      setAuthUser(parsedAuthUser);
+
+      const divisionId =
+        parsedAuthUser?.divisionId ?? parsedAuthUser?.division?.id ?? null;
+      const divisionName = parsedAuthUser?.division?.name ?? '-';
+
+      if (typeof divisionId === 'number') {
+        const normalizedDivisionId = String(divisionId);
+        setSelectedDivisionId(normalizedDivisionId);
+        setSelectedDivisionName(divisionName);
+        setForm((prev) => ({
+          ...prev,
+          divisionId: normalizedDivisionId,
+        }));
+      }
+    } catch (error) {
+      console.error(error);
+      setAlert({
+        type: 'error',
+        message: 'No se pudo cargar la sesión del usuario.',
+      });
+    }
+  }, []);
+
+  useEffect(() => {
     async function loadDivisions() {
+      if (!selectedDivisionId) return;
+
       try {
         setLoadingDivisions(true);
 
@@ -101,13 +151,12 @@ export default function ProcedureCategoryMaintainer({
         const data: Division[] = await response.json();
         setDivisions(data);
 
-        if (data.length > 0) {
-          const initialDivisionId = String(data[0].id);
-          setSelectedDivisionId(initialDivisionId);
-          setForm((prev) => ({
-            ...prev,
-            divisionId: initialDivisionId,
-          }));
+        const matchedDivision = data.find(
+          (division) => String(division.id) === selectedDivisionId,
+        );
+
+        if (matchedDivision) {
+          setSelectedDivisionName(matchedDivision.name);
         }
       } catch (error) {
         console.error(error);
@@ -121,7 +170,7 @@ export default function ProcedureCategoryMaintainer({
     }
 
     loadDivisions();
-  }, []);
+  }, [selectedDivisionId]);
 
   useEffect(() => {
     if (!selectedDivisionId) return;
@@ -204,10 +253,18 @@ export default function ProcedureCategoryMaintainer({
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (!form.divisionId || !form.code.trim() || !form.name.trim()) {
+    if (!selectedDivisionId) {
+      setAlert({
+        type: 'error',
+        message: 'No se pudo identificar la división asignada del usuario.',
+      });
+      return;
+    }
+
+    if (!form.code.trim() || !form.name.trim()) {
       setAlert({
         type: 'info',
-        message: 'División, código y nombre son obligatorios.',
+        message: 'Código y nombre son obligatorios.',
       });
       return;
     }
@@ -216,7 +273,7 @@ export default function ProcedureCategoryMaintainer({
       setSavingItem(true);
 
       const payload = {
-        divisionId: Number(form.divisionId),
+        divisionId: Number(selectedDivisionId),
         code: form.code.trim(),
         name: form.name.trim(),
         description: form.description.trim() || undefined,
@@ -305,50 +362,42 @@ export default function ProcedureCategoryMaintainer({
   }, [editingItemId, singularLabel]);
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-xl font-semibold">{pageTitle}</h1>
+    <div className="mx-auto w-full max-w-7xl space-y-6 px-6 pt-6 md:px-10 lg:px-14 xl:px-20 2xl:px-24">
+      <div className="space-y-3 text-center">
+        <h1 className="text-2xl font-semibold md:text-3xl">{pageTitle}</h1>
+        <div className="mx-auto max-w-4xl rounded border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-slate-700 shadow-sm md:text-base">
+          <span className="font-semibold text-[#0F4C81]">División asignada:</span>{' '}
+          {selectedDivisionName}
+        </div>
       </div>
 
       {alert && (
         <div
           className={[
-            'rounded border px-3 py-2 text-sm',
+            'mx-auto max-w-4xl rounded border px-3 py-2 text-sm shadow-sm',
             alert.type === 'success'
-              ? 'border-emerald-300 text-emerald-700'
+              ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
               : alert.type === 'error'
-              ? 'border-rose-300 text-rose-700'
-              : 'border-slate-300 text-slate-700',
+              ? 'border-rose-300 bg-rose-50 text-rose-700'
+              : 'border-slate-300 bg-white text-slate-700',
           ].join(' ')}
         >
           {alert.message}
         </div>
       )}
 
-      <section className="rounded border border-slate-300 p-4">
+      <section className="mx-auto w-full max-w-5xl rounded-2xl border border-slate-300 bg-white p-4 shadow-sm md:p-5 lg:p-6">
         <h2 className="mb-4 text-base font-medium">{formTitle}</h2>
 
         <form onSubmit={handleSubmit} className="grid gap-4 md:grid-cols-2">
           <div>
             <label className="mb-1 block text-sm">División</label>
-            <select
-              value={form.divisionId}
-              onChange={(e) =>
-                setForm((prev) => ({
-                  ...prev,
-                  divisionId: e.target.value,
-                }))
-              }
-              disabled={loadingDivisions}
-              className="w-full rounded border border-slate-300 px-3 py-2"
-            >
-              <option value="">Seleccione división</option>
-              {divisions.map((division) => (
-                <option key={division.id} value={division.id}>
-                  {division.name}
-                </option>
-              ))}
-            </select>
+            <input
+              type="text"
+              value={selectedDivisionName}
+              disabled
+              className="w-full rounded border border-slate-300 bg-slate-100 px-3 py-2 text-slate-600"
+            />
           </div>
 
           <div>
@@ -393,9 +442,9 @@ export default function ProcedureCategoryMaintainer({
               }
               className="w-full rounded border border-slate-300 px-3 py-2"
             >
-              <option value="BOTH">BOTH</option>
-              <option value="AMBULATORY">AMBULATORY</option>
-              <option value="SURGICAL">SURGICAL</option>
+              <option value="BOTH">Ambos</option>
+              <option value="AMBULATORY">Ambulatorio</option>
+              <option value="SURGICAL">Quirúrgico</option>
             </select>
           </div>
 
@@ -438,24 +487,18 @@ export default function ProcedureCategoryMaintainer({
         </form>
       </section>
 
-      <section className="rounded border border-slate-300 p-4">
+      <section className="mx-auto w-full max-w-6xl rounded-2xl border border-slate-300 bg-white p-4 shadow-sm md:p-5 lg:p-6">
         <h2 className="mb-4 text-base font-medium">Listado</h2>
 
         <div className="mb-4 grid gap-3 md:grid-cols-4">
           <div>
             <label className="mb-1 block text-sm">División</label>
-            <select
-              value={selectedDivisionId}
-              onChange={(e) => setSelectedDivisionId(e.target.value)}
-              className="w-full rounded border border-slate-300 px-3 py-2"
-            >
-              <option value="">Seleccione división</option>
-              {divisions.map((division) => (
-                <option key={division.id} value={division.id}>
-                  {division.name}
-                </option>
-              ))}
-            </select>
+            <input
+              type="text"
+              value={selectedDivisionName}
+              disabled
+              className="w-full rounded border border-slate-300 bg-slate-100 px-3 py-2 text-slate-600"
+            />
           </div>
 
           <div>
@@ -477,9 +520,9 @@ export default function ProcedureCategoryMaintainer({
               className="w-full rounded border border-slate-300 px-3 py-2"
             >
               <option value="">Todos</option>
-              <option value="BOTH">BOTH</option>
-              <option value="AMBULATORY">AMBULATORY</option>
-              <option value="SURGICAL">SURGICAL</option>
+              <option value="BOTH">Ambos</option>
+              <option value="AMBULATORY">Ambulatorio</option>
+              <option value="SURGICAL">Quirúrgico</option>
             </select>
           </div>
 

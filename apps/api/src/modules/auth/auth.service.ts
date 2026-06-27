@@ -6,7 +6,7 @@ import {
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../prisma/prisma.service';
-import { UserRole } from '@prisma/client';
+import { CareType, UserRole } from '@prisma/client';
 
 export class LoginDto {
   email!: string;
@@ -45,6 +45,7 @@ export class AuthService {
         email,
         passwordHash,
         role: UserRole.SUPER_ADMIN,
+        careAccess: CareType.BOTH,
         status: true,
       },
       select: {
@@ -52,6 +53,20 @@ export class AuthService {
         name: true,
         email: true,
         role: true,
+        careAccess: true,
+        divisionId: true,
+        division: {
+          select: {
+            id: true,
+            name: true,
+            code: true,
+            corporationId: true,
+            brandPrimaryColor: true,
+            brandSecondaryColor: true,
+            brandAccentColor: true,
+            brandLogoKey: true,
+          },
+        },
         status: true,
         createdAt: true,
       },
@@ -65,6 +80,20 @@ export class AuthService {
 
     const user = await this.prisma.user.findUnique({
       where: { email },
+      include: {
+        division: {
+          select: {
+            id: true,
+            name: true,
+            code: true,
+            corporationId: true,
+            brandPrimaryColor: true,
+            brandSecondaryColor: true,
+            brandAccentColor: true,
+            brandLogoKey: true,
+          },
+        },
+      },
     });
 
     if (!user || !user.status || user.deletedAt) {
@@ -93,6 +122,9 @@ export class AuthService {
         name: user.name,
         email: user.email,
         role: user.role,
+        careAccess: user.careAccess,
+        divisionId: user.divisionId,
+        division: user.division,
         status: user.status,
       },
     };
@@ -106,7 +138,21 @@ export class AuthService {
         name: true,
         email: true,
         role: true,
+        careAccess: true,
         status: true,
+        divisionId: true,
+        division: {
+          select: {
+            id: true,
+            name: true,
+            code: true,
+            corporationId: true,
+            brandPrimaryColor: true,
+            brandSecondaryColor: true,
+            brandAccentColor: true,
+            brandLogoKey: true,
+          },
+        },
         createdAt: true,
         updatedAt: true,
         deletedAt: true,
