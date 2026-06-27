@@ -8,7 +8,11 @@ async function bootstrap() {
   const port = Number(process.env.PORT || 3001);
 
   app.enableCors({
-    origin: [frontendUrl],
+    origin: [
+      frontendUrl,
+      'http://localhost:3000',
+      /^https:\/\/.*\.vercel\.app$/,
+    ],
     credentials: true,
   });
 
