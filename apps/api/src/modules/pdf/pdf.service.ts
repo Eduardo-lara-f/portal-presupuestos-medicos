@@ -1,8 +1,11 @@
 import { Injectable, InternalServerErrorException } from '@nestjs/common';
 import * as puppeteer from 'puppeteer';
+import { StorageService } from '../storage/storage.service';
+
+type PdfBudgetSection = 'PROCEDURE' | 'SUPPLY' | 'DRUG' | 'BED' | 'MEDICAL_FEE';
 
 type PdfBudgetItem = {
-  section: 'PROCEDURE' | 'SUPPLY' | 'DRUG' | 'BED';
+  section: PdfBudgetSection;
   code: string;
   name: string;
   quantity: number;
@@ -39,8 +42,16 @@ export type GenerateBudgetPdfInput = {
   generatedAt?: string;
 };
 
+export type GenerateAndUploadBudgetPdfInput = {
+  quoteId: number;
+  divisionId: number;
+  createdAt?: Date | string;
+  data: GenerateBudgetPdfInput;
+};
+
 @Injectable()
 export class PdfService {
+  constructor(private readonly storageService: StorageService) {}
   async generateBudgetPdf(data: GenerateBudgetPdfInput): Promise<Buffer> {
     let browser: puppeteer.Browser | null = null;
 
@@ -90,6 +101,32 @@ export class PdfService {
     }
   }
 
+  async generateAndUploadBudgetPdf(input: GenerateAndUploadBudgetPdfInput) {
+    const createdAt = input.createdAt ? new Date(input.createdAt) : new Date();
+    const pdfBuffer = await this.generateBudgetPdf(input.data);
+
+    const key = this.storageService.buildQuotePdfKey({
+      divisionId: input.divisionId,
+      quoteId: input.quoteId,
+      createdAt,
+    });
+
+    const uploadedFile = await this.storageService.uploadPdf({
+      key,
+      buffer: pdfBuffer,
+    });
+
+    const signedUrl = await this.storageService.getSignedUrl(key);
+
+    return {
+      ...uploadedFile,
+      signedUrl,
+      expiresInSeconds: Number(
+        process.env.AWS_S3_SIGNED_URL_EXPIRES_SECONDS ?? 900,
+      ),
+    };
+  }
+
   private buildHtml(data: GenerateBudgetPdfInput): string {
     const safeData = data ?? ({} as GenerateBudgetPdfInput);
 
@@ -123,21 +160,72 @@ export class PdfService {
       '-';
 
     const items = Array.isArray(safeData.items) ? safeData.items : [];
+    const itemsBySection = items.reduce(
+      (acc, item) => {
+        const section = item.section;
 
-    const itemsRows = items
-      .map(
-        (item) => `
-          <tr>
-            <td>${this.escapeHtml(item.section)}</td>
-            <td>${this.escapeHtml(item.code)}</td>
-            <td>${this.escapeHtml(item.name)}</td>
-            <td style="text-align:right;">${this.escapeHtml(item.quantity)}</td>
-            <td style="text-align:right;">${this.formatFactor(item.appliedFactor)}</td>
-            <td style="text-align:right;">${this.formatCurrency(item.unitPrice)}</td>
-            <td style="text-align:right;">${this.formatCurrency(item.totalPrice)}</td>
-          </tr>
-        `,
-      )
+        if (!acc[section]) {
+          acc[section] = [];
+        }
+
+        acc[section].push(item);
+        return acc;
+      },
+      {} as Record<PdfBudgetSection, PdfBudgetItem[]>,
+    );
+
+    const sectionOrder: PdfBudgetSection[] = [
+      'PROCEDURE',
+      'SUPPLY',
+      'DRUG',
+      'BED',
+      'MEDICAL_FEE',
+    ];
+
+    const itemsSections = sectionOrder
+      .map((section) => {
+        const sectionItems = itemsBySection[section] ?? [];
+
+        if (!sectionItems.length) {
+          return '';
+        }
+
+        const rows = sectionItems
+          .map(
+            (item) => `
+              <tr>
+                <td>${this.escapeHtml(item.code)}</td>
+                <td>${this.escapeHtml(item.name)}</td>
+                <td style="text-align:right;">${this.escapeHtml(item.quantity)}</td>
+                <td style="text-align:right;">${this.formatFactor(item.appliedFactor)}</td>
+                <td style="text-align:right;">${this.formatCurrency(item.unitPrice)}</td>
+                <td style="text-align:right;">${this.formatCurrency(item.totalPrice)}</td>
+              </tr>
+            `,
+          )
+          .join('');
+
+        return `
+          <div class="budget-section">
+            <h3>${this.escapeHtml(this.formatBudgetSectionLabel(section))}</h3>
+            <table>
+              <thead>
+                <tr>
+                  <th>Código</th>
+                  <th>Ítem</th>
+                  <th>Cant.</th>
+                  <th>Factor</th>
+                  <th>Unitario</th>
+                  <th>Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${rows}
+              </tbody>
+            </table>
+          </div>
+        `;
+      })
       .join('');
 
     return `
@@ -218,6 +306,27 @@ export class PdfService {
               margin-top: 8px;
             }
 
+          .budget-section {
+            margin-top: 14px;
+          }
+
+          .budget-section:first-of-type {
+            margin-top: 8px;
+          }
+
+          .budget-section h3 {
+            margin: 0;
+            padding: 8px 10px;
+            border-radius: 8px 8px 0 0;
+            background: #0F4C81;
+            color: #ffffff;
+            font-size: 13px;
+          }
+
+          .budget-section table {
+            margin-top: 0;
+          }
+
             th, td {
               border: 1px solid #e5e7eb;
               padding: 8px;
@@ -234,6 +343,8 @@ export class PdfService {
               margin-top: 20px;
               margin-left: auto;
               width: 320px;
+              page-break-inside: avoid;
+              break-inside: avoid;
             }
 
             .totals .row {
@@ -248,7 +359,9 @@ export class PdfService {
             }
 
             .notes {
-              margin-top: 20px;
+              page-break-before: always;
+              break-before: page;
+              margin-top: 0;
               border: 1px solid #dbeafe;
               background: #f8fbff;
               border-radius: 12px;
@@ -290,26 +403,15 @@ export class PdfService {
 
             <div class="card">
               <h2>Detalle del presupuesto</h2>
-              <table>
-                <thead>
-                  <tr>
-                    <th>Sección</th>
-                    <th>Código</th>
-                    <th>Ítem</th>
-                    <th>Cant.</th>
-                    <th>Factor</th>
-                    <th>Unitario</th>
-                    <th>Total</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${itemsRows || `
+              ${itemsSections || `
+                <table>
+                  <tbody>
                     <tr>
-                      <td colspan="7" style="text-align:center;">Sin ítems</td>
+                      <td colspan="6" style="text-align:center;">Sin ítems</td>
                     </tr>
-                  `}
-                </tbody>
-              </table>
+                  </tbody>
+                </table>
+              `}
             </div>
 
             <div class="totals">
@@ -335,6 +437,18 @@ export class PdfService {
         </body>
       </html>
     `;
+  }
+
+  private formatBudgetSectionLabel(section: PdfBudgetSection): string {
+    const labels: Record<PdfBudgetSection, string> = {
+      PROCEDURE: 'Prestaciones',
+      SUPPLY: 'Insumos',
+      DRUG: 'Medicamentos',
+      BED: 'Día cama',
+      MEDICAL_FEE: 'Honorarios médicos',
+    };
+
+    return labels[section];
   }
 
   private formatCurrency(value: unknown): string {

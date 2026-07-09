@@ -91,6 +91,35 @@ export class QuotesController {
     return this.quotesService.updateStatus(id, status);
   }
 
+  @Patch(':id/pdf-reference')
+  async savePdfReference(
+    @Param('id', ParseIntPipe) id: number,
+    @Body('pdfS3Key') pdfS3Key: string,
+  ) {
+    return this.quotesService.savePdfReference(id, pdfS3Key);
+  }
+
+  @Get(':id/pdf-url')
+  async getPdfSignedUrl(@Param('id', ParseIntPipe) id: number) {
+    return this.quotesService.getPdfSignedUrl(id);
+  }
+
+  @Post(':id/send-pdf')
+  async sendPdfByEmail(
+    @Param('id', ParseIntPipe) id: number,
+    @Body('to') to?: string,
+  ) {
+    return this.quotesService.sendPdfByEmail(id, to);
+  }
+
+  @Post(':id/send-pdf-whatsapp')
+  async sendPdfByWhatsApp(
+    @Param('id', ParseIntPipe) id: number,
+    @Body('to') to?: string,
+  ) {
+    return this.quotesService.sendPdfByWhatsApp(id, to);
+  }
+
   @Get(':id')
   async findOne(@Param('id', ParseIntPipe) id: number) {
     return this.quotesService.findOne(id);

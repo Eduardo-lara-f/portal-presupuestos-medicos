@@ -22,6 +22,10 @@ type LoginDto = {
   password: string;
 };
 
+type GoogleCallbackDto = {
+  code: string;
+};
+
 type AuthenticatedRequest = Request & {
   user: {
     id: number;
@@ -44,6 +48,16 @@ export class AuthController {
   @Post('login')
   async login(@Body() body: LoginDto) {
     return this.authService.login(body);
+  }
+
+  @Get('google/url')
+  async getGoogleAuthUrl() {
+    return this.authService.getGoogleAuthUrl();
+  }
+
+  @Post('google/callback')
+  async googleCallback(@Body() body: GoogleCallbackDto) {
+    return this.authService.loginWithGoogleCode(body.code);
   }
 
   @UseGuards(JwtAuthGuard)

@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import {
   CareType,
+  CatalogItemType,
   CoverageType,
   Prisma,
   QuoteItemSourceType,
@@ -8,10 +9,16 @@ import {
 } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateQuoteDto } from './dto/create-quote.dto';
+import { StorageService } from '../storage/storage.service';
+import { MailService } from '../mail/mail.service';
 
 @Injectable()
 export class QuotesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly storageService: StorageService,
+    private readonly mailService: MailService,
+  ) {}
 
   async findAll(params: {
     status?: QuoteStatus;
@@ -125,7 +132,7 @@ export class QuotesService {
       description: string;
       quantity: number;
       unitPrice: number;
-      type: 'PROCEDURE' | 'BASKET' | 'PACKAGE' | 'MEDICAL_FEE';
+      type: QuoteItemSourceType;
       parentId?: number;
     },
   ) {
@@ -158,8 +165,11 @@ export class QuotesService {
         throw new BadRequestException('Parent no existe');
       }
 
-      if (parent.type === 'PROCEDURE') {
-        throw new BadRequestException('PROCEDURE no puede tener hijos');
+      if (
+        parent.type !== QuoteItemSourceType.PACKAGE &&
+        parent.type !== QuoteItemSourceType.BASKET
+      ) {
+        throw new BadRequestException(`${parent.type} no puede tener hijos`);
       }
     }
 
@@ -295,18 +305,21 @@ export class QuotesService {
         );
 
         const finalUnitPrice = Number(procedureUnitPrice) * padFactor;
+        const itemSourceType = this.catalogItemTypeToQuoteItemSourceType(
+          pkgItem.procedure.itemType,
+        );
 
         await tx.quoteItem.create({
           data: {
             quoteId,
             parentId: parent.id,
-            sourceType: QuoteItemSourceType.PROCEDURE,
+            sourceType: itemSourceType,
             sourceId: pkgItem.procedureId,
             description: pkgItem.procedure.name,
             quantity: Number(pkgItem.quantity),
             unitPrice: finalUnitPrice,
             totalPrice: finalUnitPrice * Number(pkgItem.quantity),
-            type: 'PROCEDURE',
+            type: itemSourceType,
             editable: false,
             deletedAt: null,
           },
@@ -331,13 +344,13 @@ export class QuotesService {
             data: {
               quoteId,
               parentId: parent.id,
-              sourceType: QuoteItemSourceType.MANUAL,
+              sourceType: QuoteItemSourceType.MEDICAL_FEE,
               sourceId: fee.id,
               description: `Honorario ${fee.professional.firstName} ${fee.professional.lastName} - ${fee.procedure.name}`,
               quantity: 1,
               unitPrice: feeUnitPrice,
               totalPrice: feeUnitPrice,
-              type: 'MEDICAL_FEE',
+              type: QuoteItemSourceType.MEDICAL_FEE,
               editable: false,
               deletedAt: null,
             },
@@ -396,6 +409,7 @@ export class QuotesService {
     const quote = await this.prisma.quote.findUnique({
       where: { id },
       include: {
+        patient: true,
         items: {
           where: { deletedAt: null },
           orderBy: { id: 'asc' },
@@ -408,6 +422,231 @@ export class QuotesService {
     }
 
     return quote;
+  }
+
+  async savePdfReference(quoteId: number, pdfS3Key: string) {
+    const quote = await this.prisma.quote.findUnique({
+      where: { id: quoteId },
+    });
+
+    if (!quote) {
+      throw new BadRequestException('Cotización no encontrada');
+    }
+
+    return this.prisma.quote.update({
+      where: { id: quoteId },
+      data: {
+        pdfS3Key,
+        pdfGeneratedAt: new Date(),
+      },
+    });
+  }
+
+  async getPdfSignedUrl(quoteId: number) {
+    const quote = await this.prisma.quote.findUnique({
+      where: { id: quoteId },
+      select: {
+        id: true,
+        pdfS3Key: true,
+        pdfGeneratedAt: true,
+      },
+    });
+
+    if (!quote) {
+      throw new BadRequestException('Cotización no encontrada');
+    }
+
+    if (!quote.pdfS3Key) {
+      throw new BadRequestException('La cotización no tiene PDF generado');
+    }
+
+    const signedUrl = await this.storageService.getSignedUrl(quote.pdfS3Key);
+
+    return {
+      quoteId: quote.id,
+      key: quote.pdfS3Key,
+      pdfGeneratedAt: quote.pdfGeneratedAt,
+      signedUrl,
+      expiresInSeconds: Number(
+        process.env.AWS_S3_SIGNED_URL_EXPIRES_SECONDS ?? 900,
+      ),
+    };
+  }
+
+  async sendPdfByEmail(quoteId: number, to?: string) {
+    const quote = await this.prisma.quote.findUnique({
+      where: { id: quoteId },
+      select: {
+        id: true,
+        pdfS3Key: true,
+        patient: {
+          select: {
+            firstName: true,
+            lastName: true,
+            email: true,
+          },
+        },
+      },
+    });
+
+    if (!quote) {
+      throw new BadRequestException('Cotización no encontrada');
+    }
+
+    if (!quote.pdfS3Key) {
+      throw new BadRequestException('La cotización no tiene PDF generado');
+    }
+
+    const recipientEmail = to?.trim() || quote.patient.email;
+
+    if (!recipientEmail) {
+      throw new BadRequestException(
+        'La cotización no tiene correo de paciente asociado',
+      );
+    }
+
+    const pdfBuffer = await this.storageService.getObjectBuffer(quote.pdfS3Key);
+    const patientName = `${quote.patient.firstName} ${quote.patient.lastName}`.trim();
+
+    const result = await this.mailService.sendQuotePdfEmail({
+      to: recipientEmail,
+      patientName,
+      quoteId: quote.id,
+      pdfBuffer,
+      filename: `presupuesto-${quote.id}.pdf`,
+    });
+
+    return {
+      quoteId: quote.id,
+      to: recipientEmail,
+      sent: true,
+      result,
+    };
+  }
+
+  async sendPdfByWhatsApp(quoteId: number, to?: string) {
+    const quote = await this.prisma.quote.findUnique({
+      where: { id: quoteId },
+      select: {
+        id: true,
+        pdfS3Key: true,
+        patient: {
+          select: {
+            firstName: true,
+            lastName: true,
+            phone: true,
+          },
+        },
+      },
+    });
+
+    if (!quote) {
+      throw new BadRequestException('Cotización no encontrada');
+    }
+
+    if (!quote.pdfS3Key) {
+      throw new BadRequestException('La cotización no tiene PDF generado');
+    }
+
+    const recipientPhone = this.normalizeWhatsAppPhone(to || quote.patient.phone);
+
+    if (!recipientPhone) {
+      throw new BadRequestException(
+        'La cotización no tiene teléfono de paciente asociado',
+      );
+    }
+
+    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+    const accessToken = process.env.WHATSAPP_ACCESS_TOKEN;
+
+    if (!phoneNumberId || !accessToken) {
+      throw new BadRequestException('WhatsApp no está configurado');
+    }
+
+    const signedUrl = await this.storageService.getSignedUrl(quote.pdfS3Key);
+    const patientName = `${quote.patient.firstName} ${quote.patient.lastName}`.trim();
+    const caption = `Hola ${patientName || 'paciente'}, te enviamos tu presupuesto médico.`;
+
+    const response = await fetch(
+      `https://graph.facebook.com/v20.0/${phoneNumberId}/messages`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          messaging_product: 'whatsapp',
+          to: recipientPhone,
+          type: 'document',
+          document: {
+            link: signedUrl,
+            filename: `presupuesto-${quote.id}.pdf`,
+            caption,
+          },
+        }),
+      },
+    );
+
+    const result = await response.json();
+
+    if (!response.ok) {
+      throw new BadRequestException({
+        message: 'No se pudo enviar el presupuesto por WhatsApp',
+        detail: result,
+      });
+    }
+
+    return {
+      quoteId: quote.id,
+      to: recipientPhone,
+      sent: true,
+      result,
+    };
+  }
+
+  private normalizeWhatsAppPhone(phone?: string | null): string | null {
+    if (!phone?.trim()) {
+      return null;
+    }
+
+    const digits = phone.replace(/\D/g, '');
+
+    if (!digits) {
+      return null;
+    }
+
+    if (digits.startsWith('56')) {
+      return digits;
+    }
+
+    if (digits.length === 9 && digits.startsWith('9')) {
+      return `56${digits}`;
+    }
+
+    return digits;
+  }
+
+  private catalogItemTypeToQuoteItemSourceType(
+    itemType: CatalogItemType | null | undefined,
+  ): QuoteItemSourceType {
+    if (itemType === CatalogItemType.SUPPLY) {
+      return QuoteItemSourceType.SUPPLY;
+    }
+
+    if (itemType === CatalogItemType.MEDICATION) {
+      return QuoteItemSourceType.MEDICATION;
+    }
+
+    if (itemType === CatalogItemType.BED_DAY) {
+      return QuoteItemSourceType.BED_DAY;
+    }
+
+    if (itemType === CatalogItemType.MEDICAL_FEE) {
+      return QuoteItemSourceType.MEDICAL_FEE;
+    }
+
+    return QuoteItemSourceType.PROCEDURE;
   }
 
   private validateEnums(data: CreateQuoteDto) {

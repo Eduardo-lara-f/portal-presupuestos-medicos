@@ -12,3 +12,15 @@ yarn-debug.log*
 yarn-error.log*
 
 .DS_Store
+.env
+
+apps/api/.env
+
+apps/web/.env.local
+
+
+apps/api/dist/
+dist/
+
+apps/api/dist/
+dist/

@@ -1,6 +1,10 @@
 import { Body, Controller, Post, Res } from '@nestjs/common';
 import { Response } from 'express';
-import { GenerateBudgetPdfInput, PdfService } from './pdf.service';
+import {
+  GenerateAndUploadBudgetPdfInput,
+  GenerateBudgetPdfInput,
+  PdfService,
+} from './pdf.service';
 
 @Controller('pdf')
 export class PdfController {
@@ -23,5 +27,12 @@ export class PdfController {
     });
 
     res.end(pdfBuffer);
+  }
+
+  @Post('budget/upload')
+  async generateAndUploadBudgetPdf(@Body() body: GenerateAndUploadBudgetPdfInput) {
+    console.log('BODY PDF S3:', JSON.stringify(body, null, 2));
+
+    return this.pdfService.generateAndUploadBudgetPdf(body);
   }
 }

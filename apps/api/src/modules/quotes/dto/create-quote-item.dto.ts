@@ -30,8 +30,8 @@ export class CreateQuoteItemDto {
   @Min(0)
   unitPrice!: number;
 
-  @IsString()
-  type!: 'PROCEDURE' | 'BASKET' | 'PACKAGE' | 'MEDICAL_FEE';
+  @IsEnum(QuoteItemSourceType)
+  type!: QuoteItemSourceType;
 
   @IsOptional()
   @Type(() => Number)

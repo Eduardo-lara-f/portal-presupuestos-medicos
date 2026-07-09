@@ -11,6 +11,8 @@
     "prisma:migrate": "prisma migrate dev --schema=../../prisma/schema.prisma"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1079.0",
+    "@aws-sdk/s3-request-presigner": "^3.1079.0",
     "@nestjs/common": "^11.1.17",
     "@nestjs/config": "^4.0.3",
     "@nestjs/core": "^11.1.17",
@@ -29,6 +31,7 @@
     "pg": "^8.20.0",
     "puppeteer": "^25.0.2",
     "reflect-metadata": "^0.2.2",
+    "resend": "^6.17.1",
     "rxjs": "^7.8.2"
   },
   "devDependencies": {

@@ -39,11 +39,24 @@ enum QuoteStatus {
   SENT
 }
 
+
 enum QuoteItemSourceType {
   PROCEDURE
+  SUPPLY
+  MEDICATION
+  BED_DAY
+  MEDICAL_FEE
   PACKAGE
   BASKET
   MANUAL
+}
+
+enum CatalogItemType {
+  PROCEDURE
+  SUPPLY
+  MEDICATION
+  BED_DAY
+  MEDICAL_FEE
 }
 
 enum MedicalPackageType {
@@ -102,6 +115,7 @@ model User {
   name         String
   email        String    @unique
   passwordHash String
+  googleId     String?
   role         UserRole
   careAccess   CareType  @default(BOTH)
   status       Boolean   @default(true)
@@ -186,6 +200,7 @@ model Procedure {
   name         String
   description  String?
   category     String?
+  itemType     CatalogItemType         @default(PROCEDURE)
   careType     CareType               @default(BOTH)
   active       Boolean                @default(true)
   prices       ProcedurePrice[]
@@ -361,6 +376,8 @@ model Quote {
   discountTotal   Decimal             @db.Decimal(12, 2)
   total           Decimal             @db.Decimal(12, 2)
   notes           String?
+  pdfS3Key        String?
+  pdfGeneratedAt  DateTime?
   createdByUserId Int
   createdBy       User                @relation("QuoteCreatedBy", fields: [createdByUserId], references: [id])
   professionals   QuoteProfessional[]

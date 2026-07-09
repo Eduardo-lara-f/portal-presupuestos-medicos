@@ -1,4 +1,4 @@
-import { CareType } from '@prisma/client';
+import { CareType, CatalogItemType } from '@prisma/client';
 import { IsEnum, IsInt, IsOptional, IsString, MinLength } from 'class-validator';
 
 export class UpdateProcedureDto {
@@ -23,6 +23,10 @@ export class UpdateProcedureDto {
   @IsOptional()
   @IsString()
   category?: string;
+
+  @IsOptional()
+  @IsEnum(CatalogItemType)
+  itemType?: CatalogItemType;
 
   @IsOptional()
   @IsEnum(CareType)

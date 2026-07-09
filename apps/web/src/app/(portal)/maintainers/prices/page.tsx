@@ -3,9 +3,18 @@
 import React, { FormEvent, useEffect, useMemo, useState } from 'react';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
+const ITEMS_PER_PAGE = 10;
 
 type CoverageType = 'ISAPRE_PLAN' | 'FONASA' | 'PARTICULAR' | 'OTHER';
+
 type CareType = 'AMBULATORY' | 'SURGICAL' | 'BOTH';
+
+type CatalogItemType =
+  | 'PROCEDURE'
+  | 'SUPPLY'
+  | 'MEDICATION'
+  | 'BED_DAY'
+  | 'MEDICAL_FEE';
 
 type Procedure = {
   id: number;
@@ -14,6 +23,7 @@ type Procedure = {
   name: string;
   description?: string | null;
   category?: string | null;
+  itemType: CatalogItemType;
   careType: CareType;
   active: boolean;
 };
@@ -47,6 +57,12 @@ type CoverageCatalogResponse = {
   divisionId: number;
   coverages: CoverageCatalogItem[];
   isapres: Isapre[];
+  itemTypes: ItemTypeCatalogItem[];
+};
+
+type ItemTypeCatalogItem = {
+  value: CatalogItemType;
+  label: string;
 };
 
 type ProcedurePrice = {
@@ -72,6 +88,7 @@ type ProcedurePrice = {
     id: number;
     code: string;
     name: string;
+    itemType: CatalogItemType;
     careType: CareType;
     active: boolean;
   };
@@ -108,6 +125,7 @@ type AuthUser = {
 
 type PriceFormState = {
   divisionId: string;
+  itemType: CatalogItemType;
   procedureId: string;
   coverageType: CoverageType;
   isapreId: string;
@@ -122,6 +140,7 @@ type PriceFormState = {
 
 const INITIAL_FORM: PriceFormState = {
   divisionId: '',
+  itemType: 'PROCEDURE',
   procedureId: '',
   coverageType: 'ISAPRE_PLAN',
   isapreId: '',
@@ -155,6 +174,7 @@ export default function MaintainersPricesPage() {
   const [isapres, setIsapres] = useState<Isapre[]>([]);
   const [plans, setPlans] = useState<IsaprePlan[]>([]);
   const [coverageCatalog, setCoverageCatalog] = useState<CoverageCatalogItem[]>([]);
+  const [itemTypes, setItemTypes] = useState<ItemTypeCatalogItem[]>([]);
 
   const [loadingProcedures, setLoadingProcedures] = useState(false);
   const [loadingPrices, setLoadingPrices] = useState(false);
@@ -167,7 +187,9 @@ export default function MaintainersPricesPage() {
   const [selectedDivisionName, setSelectedDivisionName] = useState('-');
   const [search, setSearch] = useState('');
   const [coverageTypeFilter, setCoverageTypeFilter] = useState('');
+  const [itemTypeFilter, setItemTypeFilter] = useState<CatalogItemType | ''>('');
   const [activeFilter, setActiveFilter] = useState('true');
+  const [currentPage, setCurrentPage] = useState(1);
 
   const [editingPriceId, setEditingPriceId] = useState<number | null>(null);
   const [form, setForm] = useState<PriceFormState>(INITIAL_FORM);
@@ -212,7 +234,7 @@ export default function MaintainersPricesPage() {
   useEffect(() => {
     if (!selectedDivisionId) return;
     loadPrices();
-  }, [selectedDivisionId, coverageTypeFilter, activeFilter]);
+  }, [selectedDivisionId, itemTypeFilter, coverageTypeFilter, activeFilter]);
 
   useEffect(() => {
     if (!form.divisionId) {
@@ -220,17 +242,19 @@ export default function MaintainersPricesPage() {
       return;
     }
 
-    loadProceduresByDivision(form.divisionId);
-  }, [form.divisionId]);
+    loadProceduresByDivision(form.divisionId, form.itemType);
+  }, [form.divisionId, form.itemType]);
 
   useEffect(() => {
     if (!form.divisionId) {
       setCoverageCatalog([]);
+      setItemTypes([]);
       setIsapres([]);
       setPlans([]);
       setForm((prev) => ({
         ...prev,
         coverageType: 'ISAPRE_PLAN',
+        itemType: 'PROCEDURE',
         isapreId: '',
         isaprePlanId: '',
         fonasaCode: '',
@@ -277,6 +301,10 @@ export default function MaintainersPricesPage() {
         params.set('search', search.trim());
       }
 
+      if (itemTypeFilter) {
+        params.set('itemType', itemTypeFilter);
+      }
+
       if (coverageTypeFilter) {
         params.set('coverageType', coverageTypeFilter);
       }
@@ -292,6 +320,7 @@ export default function MaintainersPricesPage() {
 
       const data: ProcedurePrice[] = await response.json();
       setPrices(data);
+      setCurrentPage(1);
     } catch (error) {
       console.error(error);
       setAlert({
@@ -303,7 +332,10 @@ export default function MaintainersPricesPage() {
     }
   }
 
-  async function loadProceduresByDivision(divisionId: string) {
+  async function loadProceduresByDivision(
+    divisionId: string,
+    itemType: CatalogItemType,
+  ) {
     try {
       setLoadingProcedures(true);
 
@@ -312,9 +344,11 @@ export default function MaintainersPricesPage() {
         active: 'true',
       });
 
+      params.set('itemType', itemType);
+
       const response = await fetch(`${API_URL}/procedures?${params.toString()}`);
       if (!response.ok) {
-        throw new Error('No se pudieron cargar las prestaciones.');
+        throw new Error('No se pudieron cargar los ítems del tipo seleccionado.');
       }
 
       const data: Procedure[] = await response.json();
@@ -323,7 +357,7 @@ export default function MaintainersPricesPage() {
       console.error(error);
       setAlert({
         type: 'error',
-        message: 'No se pudieron cargar las prestaciones de la división.',
+        message: 'No se pudieron cargar los ítems de la división.',
       });
     } finally {
       setLoadingProcedures(false);
@@ -345,6 +379,7 @@ export default function MaintainersPricesPage() {
       const data: CoverageCatalogResponse = await response.json();
 
       setCoverageCatalog(data.coverages);
+      setItemTypes(data.itemTypes ?? []);
       setIsapres(data.isapres);
 
       const currentCoverageStillValid = data.coverages.some(
@@ -365,6 +400,7 @@ export default function MaintainersPricesPage() {
         return {
           ...prev,
           coverageType: nextCoverageType,
+          itemType: 'PROCEDURE',
           isapreId: nextCoverageConfig?.requiresIsapre ? prev.isapreId : '',
           isaprePlanId: nextCoverageConfig?.requiresPlan ? prev.isaprePlanId : '',
           fonasaCode: nextCoverageConfig?.requiresFonasaCode ? prev.fonasaCode : '',
@@ -374,6 +410,7 @@ export default function MaintainersPricesPage() {
     } catch (error) {
       console.error(error);
       setCoverageCatalog([]);
+      setItemTypes([]);
       setIsapres([]);
       setPlans([]);
       setAlert({
@@ -416,6 +453,7 @@ export default function MaintainersPricesPage() {
 
     setForm({
       divisionId: selectedDivisionId || '',
+      itemType: itemTypes[0]?.value ?? 'PROCEDURE',
       procedureId: '',
       coverageType: defaultCoverageType,
       isapreId: '',
@@ -451,6 +489,7 @@ export default function MaintainersPricesPage() {
 
     setForm({
       divisionId: String(price.divisionId),
+      itemType: price.procedure?.itemType ?? 'PROCEDURE',
       procedureId: String(price.procedureId),
       coverageType: price.coverageType,
       isapreId: price.isapreId ? String(price.isapreId) : '',
@@ -467,10 +506,10 @@ export default function MaintainersPricesPage() {
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (!form.divisionId || !form.procedureId || !form.price.trim()) {
+    if (!form.divisionId || !form.itemType || !form.procedureId || !form.price.trim()) {
       setAlert({
         type: 'info',
-        message: 'División, prestación y precio son obligatorios.',
+        message: 'División, tipo de ítem, ítem y precio son obligatorios.',
       });
       return;
     }
@@ -614,20 +653,25 @@ export default function MaintainersPricesPage() {
     return editingPriceId ? 'Editar precio' : 'Crear precio';
   }, [editingPriceId]);
 
+  const totalPages = Math.max(1, Math.ceil(prices.length / ITEMS_PER_PAGE));
+
+  const paginatedPrices = useMemo(() => {
+    const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
+    return prices.slice(startIndex, startIndex + ITEMS_PER_PAGE);
+  }, [prices, currentPage]);
+
   return (
-    <div className="mx-auto w-full max-w-6xl space-y-8 px-4 pb-8 pt-2 md:px-8 xl:px-12">
-      <div className="flex justify-center">
-        <div className="w-full max-w-3xl rounded-[28px] border border-sky-100 bg-white px-6 py-6 text-center shadow-[0_15px_40px_-24px_rgba(15,76,129,0.35)]">
-          <p className="text-xs font-semibold uppercase tracking-[0.24em] text-sky-600">
-            Mantenedores
-          </p>
-          <h1 className="mt-2 text-3xl font-bold tracking-tight text-[#0F4C81] md:text-4xl">
-            Mantenedor de precios
-          </h1>
-          <p className="mt-3 text-sm text-slate-600 md:text-base">
-            Administre precios por prestación y cobertura dentro de la división asignada.
-          </p>
-        </div>
+    <div className="mx-auto w-full max-w-[1400px] px-6 pb-10 pt-4 md:px-8 lg:px-10">
+      <div className="mb-8 text-center">
+        <p className="text-xs font-bold uppercase tracking-[0.35em] text-sky-500">
+          Mantenedores
+        </p>
+        <h1 className="mt-3 text-3xl font-black tracking-[-0.04em] text-[#0F4C81] md:text-4xl">
+          Mantenedor de precios
+        </h1>
+        <p className="mx-auto mt-3 max-w-2xl text-sm text-slate-500 md:text-base">
+          Administre precios por tipo de ítem y cobertura dentro de la división asignada.
+        </p>
       </div>
 
       {alert && (
@@ -645,22 +689,22 @@ export default function MaintainersPricesPage() {
         </div>
       )}
 
-      <section className="rounded-[28px] border border-sky-100 bg-white p-6 shadow-[0_15px_40px_-24px_rgba(15,76,129,0.18)] md:p-7">
-        <div className="mb-6 flex flex-col gap-3 border-b border-sky-100 pb-5 md:flex-row md:items-center md:justify-between">
-          <div>
-            <h2 className="text-xl font-semibold text-[#0F4C81]">{pageTitle}</h2>
-            <p className="mt-1 text-sm text-slate-600">
-              Cree y edite precios para prestaciones según cobertura.
-            </p>
-          </div>
+      <section className="mb-6 overflow-hidden rounded-[32px] border border-sky-100 bg-white shadow-[0_24px_60px_-38px_rgba(15,76,129,0.45)]">
+        <div className="bg-gradient-to-r from-[#0F4C81] to-[#1E88C8] px-6 py-5 text-white md:px-8">
+          <p className="text-xs font-semibold uppercase tracking-[0.24em] text-sky-100">
+            Formulario
+          </p>
+          <h2 className="mt-1 text-xl font-bold">{pageTitle}</h2>
+        </div>
 
+        <div className="border-b border-sky-100 px-6 py-4 md:px-8">
           <div className="rounded-2xl border border-sky-100 bg-sky-50 px-4 py-3 text-sm text-slate-700">
             <span className="font-semibold text-[#0F4C81]">División asignada:</span>{' '}
             {selectedDivisionName}
           </div>
         </div>
 
-        <form onSubmit={handleSubmit} className="grid gap-4 md:grid-cols-2">
+        <form onSubmit={handleSubmit} className="grid gap-5 p-6 md:grid-cols-2 md:p-8">
           <div>
             <label className="mb-2 block text-[11px] font-bold uppercase tracking-[0.18em] text-[#0F4C81]">
               División
@@ -671,7 +715,28 @@ export default function MaintainersPricesPage() {
           </div>
 
           <div>
-            <label className="mb-1 block text-sm">Prestación</label>
+            <label className="mb-2 block text-[11px] font-bold uppercase tracking-[0.18em] text-[#0F4C81]">Tipo de ítem</label>
+            <select
+              value={form.itemType}
+              onChange={(e) =>
+                setForm((prev) => ({
+                  ...prev,
+                  itemType: e.target.value as CatalogItemType,
+                  procedureId: '',
+                }))
+              }
+              disabled={!form.divisionId || loadingCatalog || itemTypes.length === 0}
+              className="w-full rounded-2xl border border-sky-100 bg-white px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-50"
+            >
+              {itemTypes.map((itemType) => (
+                <option key={itemType.value} value={itemType.value}>
+                  {itemType.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="mb-2 block text-[11px] font-bold uppercase tracking-[0.18em] text-[#0F4C81]">Ítem</label>
             <select
               value={form.procedureId}
               onChange={(e) =>
@@ -683,7 +748,7 @@ export default function MaintainersPricesPage() {
               disabled={!form.divisionId || loadingProcedures}
               className="w-full rounded-2xl border border-sky-100 bg-white px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
             >
-              <option value="">Seleccione prestación</option>
+              <option value="">Seleccione ítem</option>
               {procedures.map((procedure) => (
                 <option key={procedure.id} value={procedure.id}>
                   {procedure.code} - {procedure.name}
@@ -693,7 +758,7 @@ export default function MaintainersPricesPage() {
           </div>
 
           <div>
-            <label className="mb-1 block text-sm">Cobertura</label>
+            <label className="mb-2 block text-[11px] font-bold uppercase tracking-[0.18em] text-[#0F4C81]">Cobertura</label>
             <select
               value={form.coverageType}
               onChange={(e) => handleCoverageTypeChange(e.target.value as CoverageType)}
@@ -709,7 +774,7 @@ export default function MaintainersPricesPage() {
           </div>
 
           <div>
-            <label className="mb-1 block text-sm">Moneda</label>
+            <label className="mb-2 block text-[11px] font-bold uppercase tracking-[0.18em] text-[#0F4C81]">Moneda</label>
             <input
               type="text"
               value={form.currency}
@@ -725,7 +790,7 @@ export default function MaintainersPricesPage() {
 
           {selectedCoverageConfig?.requiresIsapre && (
             <div>
-              <label className="mb-1 block text-sm">Isapre</label>
+              <label className="mb-2 block text-[11px] font-bold uppercase tracking-[0.18em] text-[#0F4C81]">Isapre</label>
               <select
                 value={form.isapreId}
                 onChange={(e) =>
@@ -750,7 +815,7 @@ export default function MaintainersPricesPage() {
 
           {selectedCoverageConfig?.requiresPlan && (
             <div>
-              <label className="mb-1 block text-sm">Plan</label>
+              <label className="mb-2 block text-[11px] font-bold uppercase tracking-[0.18em] text-[#0F4C81]">Plan</label>
               <select
                 value={form.isaprePlanId}
                 onChange={(e) =>
@@ -774,7 +839,7 @@ export default function MaintainersPricesPage() {
 
           {selectedCoverageConfig?.requiresFonasaCode && (
             <div>
-              <label className="mb-1 block text-sm">Código Fonasa</label>
+              <label className="mb-2 block text-[11px] font-bold uppercase tracking-[0.18em] text-[#0F4C81]">Código Fonasa</label>
               <input
                 type="text"
                 value={form.fonasaCode}
@@ -791,7 +856,7 @@ export default function MaintainersPricesPage() {
 
           {selectedCoverageConfig?.requiresPayerLabel && (
             <div>
-              <label className="mb-1 block text-sm">Pagador</label>
+              <label className="mb-2 block text-[11px] font-bold uppercase tracking-[0.18em] text-[#0F4C81]">Pagador</label>
               <input
                 type="text"
                 value={form.payerLabel}
@@ -807,7 +872,7 @@ export default function MaintainersPricesPage() {
           )}
 
           <div>
-            <label className="mb-1 block text-sm">Precio</label>
+            <label className="mb-2 block text-[11px] font-bold uppercase tracking-[0.18em] text-[#0F4C81]">Precio</label>
             <input
               type="number"
               min={0}
@@ -823,7 +888,7 @@ export default function MaintainersPricesPage() {
           </div>
 
           <div>
-            <label className="mb-1 block text-sm">Vigencia desde</label>
+            <label className="mb-2 block text-[11px] font-bold uppercase tracking-[0.18em] text-[#0F4C81]">Vigencia desde</label>
             <input
               type="date"
               value={form.effectiveFrom}
@@ -838,7 +903,7 @@ export default function MaintainersPricesPage() {
           </div>
 
           <div>
-            <label className="mb-1 block text-sm">Vigencia hasta</label>
+            <label className="mb-2 block text-[11px] font-bold uppercase tracking-[0.18em] text-[#0F4C81]">Vigencia hasta</label>
             <input
               type="date"
               value={form.effectiveTo}
@@ -876,15 +941,16 @@ export default function MaintainersPricesPage() {
         </form>
       </section>
 
-      <section className="rounded-[28px] border border-sky-100 bg-white p-6 shadow-[0_15px_40px_-24px_rgba(15,76,129,0.18)] md:p-7">
-        <div className="mb-6 border-b border-sky-100 pb-5">
-          <h2 className="text-xl font-semibold text-[#0F4C81]">Listado</h2>
-          <p className="mt-1 text-sm text-slate-600">
-            Revise, filtre y administre los precios configurados para la división asignada.
+      <section className="overflow-hidden rounded-[32px] border border-sky-100 bg-white shadow-[0_24px_60px_-38px_rgba(15,76,129,0.45)]">
+        <div className="bg-gradient-to-r from-[#0F4C81] to-[#1E88C8] px-6 py-5 text-white md:px-8">
+          <p className="text-xs font-semibold uppercase tracking-[0.24em] text-sky-100">
+            Listado
           </p>
+          <h2 className="mt-1 text-xl font-bold">Precios</h2>
         </div>
 
-        <div className="mb-4 grid gap-3 md:grid-cols-4">
+        <div className="p-6 md:p-8">
+          <div className="mb-5 grid gap-4 md:grid-cols-5">
           <div>
             <label className="mb-2 block text-[11px] font-bold uppercase tracking-[0.18em] text-[#0F4C81]">
               División
@@ -895,21 +961,45 @@ export default function MaintainersPricesPage() {
           </div>
 
           <div>
-            <label className="mb-1 block text-sm">Buscar</label>
+            <label className="mb-2 block text-[11px] font-bold uppercase tracking-[0.18em] text-[#0F4C81]">Buscar</label>
             <input
               type="text"
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              onChange={(e) => {
+                setSearch(e.target.value);
+                setCurrentPage(1);
+              }}
               className="w-full rounded-2xl border border-sky-100 bg-white px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
               placeholder="Prestación, código o pagador"
             />
           </div>
 
           <div>
-            <label className="mb-1 block text-sm">Cobertura</label>
+            <label className="mb-2 block text-[11px] font-bold uppercase tracking-[0.18em] text-[#0F4C81]">Tipo de ítem</label>
+            <select
+              value={itemTypeFilter}
+              onChange={(e) => {
+                setItemTypeFilter(e.target.value as CatalogItemType | '');
+                setCurrentPage(1);
+              }}
+              className="w-full rounded-2xl border border-sky-100 bg-white px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
+            >
+              <option value="">Todos</option>
+              {itemTypes.map((itemType) => (
+                <option key={itemType.value} value={itemType.value}>
+                  {itemType.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="mb-2 block text-[11px] font-bold uppercase tracking-[0.18em] text-[#0F4C81]">Cobertura</label>
             <select
               value={coverageTypeFilter}
-              onChange={(e) => setCoverageTypeFilter(e.target.value)}
+              onChange={(e) => {
+                setCoverageTypeFilter(e.target.value);
+                setCurrentPage(1);
+              }}
               className="w-full rounded-2xl border border-sky-100 bg-white px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
             >
               <option value="">Todas</option>
@@ -922,10 +1012,13 @@ export default function MaintainersPricesPage() {
           </div>
 
           <div>
-            <label className="mb-1 block text-sm">Estado</label>
+            <label className="mb-2 block text-[11px] font-bold uppercase tracking-[0.18em] text-[#0F4C81]">Estado</label>
             <select
               value={activeFilter}
-              onChange={(e) => setActiveFilter(e.target.value)}
+              onChange={(e) => {
+                setActiveFilter(e.target.value);
+                setCurrentPage(1);
+              }}
               className="w-full rounded-2xl border border-sky-100 bg-white px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
             >
               <option value="">Todos</option>
@@ -954,87 +1047,142 @@ export default function MaintainersPricesPage() {
             No hay precios para los filtros seleccionados.
           </div>
         ) : (
-          <div className="overflow-x-auto rounded-2xl border border-sky-100">
-            <table className="min-w-full border-collapse text-sm">
-              <thead>
-                <tr>
-                  <th className="border-b border-sky-100 bg-sky-50 px-4 py-3 text-left text-xs font-bold uppercase tracking-[0.14em] text-[#0F4C81]">ID</th>
-                  <th className="border-b border-sky-100 bg-sky-50 px-4 py-3 text-left text-xs font-bold uppercase tracking-[0.14em] text-[#0F4C81]">División</th>
-                  <th className="border-b border-sky-100 bg-sky-50 px-4 py-3 text-left text-xs font-bold uppercase tracking-[0.14em] text-[#0F4C81]">Prestación</th>
-                  <th className="border-b border-sky-100 bg-sky-50 px-4 py-3 text-left text-xs font-bold uppercase tracking-[0.14em] text-[#0F4C81]">Cobertura</th>
-                  <th className="border-b border-sky-100 bg-sky-50 px-4 py-3 text-left text-xs font-bold uppercase tracking-[0.14em] text-[#0F4C81]">Isapre</th>
-                  <th className="border-b border-sky-100 bg-sky-50 px-4 py-3 text-left text-xs font-bold uppercase tracking-[0.14em] text-[#0F4C81]">Plan</th>
-                  <th className="border-b border-sky-100 bg-sky-50 px-4 py-3 text-left text-xs font-bold uppercase tracking-[0.14em] text-[#0F4C81]">Pagador / Fonasa</th>
-                  <th className="border-b border-sky-100 bg-sky-50 px-4 py-3 text-left text-xs font-bold uppercase tracking-[0.14em] text-[#0F4C81]">Precio</th>
-                  <th className="border-b border-sky-100 bg-sky-50 px-4 py-3 text-left text-xs font-bold uppercase tracking-[0.14em] text-[#0F4C81]">Vigencia</th>
-                  <th className="border-b border-sky-100 bg-sky-50 px-4 py-3 text-left text-xs font-bold uppercase tracking-[0.14em] text-[#0F4C81]">Activo</th>
-                  <th className="border-b border-sky-100 bg-sky-50 px-4 py-3 text-left text-xs font-bold uppercase tracking-[0.14em] text-[#0F4C81]">Acciones</th>
-                </tr>
-              </thead>
-              <tbody>
-                {prices.map((price) => (
-                  <tr key={price.id}>
-                    <td className="border-b border-sky-50 px-4 py-3 text-slate-700">{price.id}</td>
-                    <td className="border-b border-sky-50 px-4 py-3 text-slate-700">
-                      {price.division?.name ?? price.divisionId}
-                    </td>
-                    <td className="border-b border-sky-50 px-4 py-3 text-slate-700">
-                      {price.procedure
-                        ? `${price.procedure.code} - ${price.procedure.name}`
-                        : price.procedureId}
-                    </td>
-                    <td className="border-b border-sky-50 px-4 py-3 text-slate-700">
-                      {coverageCatalog.find((item) => item.type === price.coverageType)?.label ??
-                        price.coverageType}
-                    </td>
-                    <td className="border-b border-sky-50 px-4 py-3 text-slate-700">
-                      {price.isapre?.name ?? '-'}
-                    </td>
-                    <td className="border-b border-sky-50 px-4 py-3 text-slate-700">
-                      {price.isaprePlan?.name ?? '-'}
-                    </td>
-                    <td className="border-b border-sky-50 px-4 py-3 text-slate-700">
-                      {price.fonasaCode ?? price.payerLabel ?? '-'}
-                    </td>
-                    <td className="border-b border-sky-50 px-4 py-3 text-slate-700">
-                      {formatCurrency(price.price)}
-                    </td>
-                    <td className="border-b border-sky-50 px-4 py-3 text-slate-700">
-                      {formatDateInput(price.effectiveFrom) || '-'} / {formatDateInput(price.effectiveTo) || '-'}
-                    </td>
-                    <td className="border-b border-sky-50 px-4 py-3 text-slate-700">
-                      {price.active ? 'Sí' : 'No'}
-                    </td>
-                    <td className="border-b border-sky-50 px-4 py-3 text-slate-700">
-                      <div className="flex gap-2">
-                        <button
-                          type="button"
-                          onClick={() => handleEdit(price)}
-                          className="rounded-xl border border-sky-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-sky-50"
-                        >
-                          Editar
-                        </button>
+          <div className="space-y-4">
+            {paginatedPrices.map((price) => {
+              const procedureLabel = price.procedure
+                ? `${price.procedure.code} - ${price.procedure.name}`
+                : String(price.procedureId);
+              const itemTypeLabel =
+                itemTypes.find((item) => item.value === price.procedure?.itemType)?.label ??
+                price.procedure?.itemType ??
+                '-';
+              const coverageLabel =
+                coverageCatalog.find((item) => item.type === price.coverageType)?.label ??
+                price.coverageType;
+              const payerLabel = price.fonasaCode ?? price.payerLabel ?? '-';
+              const effectiveLabel = `${formatDateInput(price.effectiveFrom) || '-'} / ${
+                formatDateInput(price.effectiveTo) || '-'
+              }`;
 
-                        <button
-                          type="button"
-                          onClick={() => handleToggleStatus(price)}
-                          disabled={updatingStatusId === price.id}
-                          className="rounded-xl border border-sky-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-60"
+              return (
+                <div
+                  key={price.id}
+                  className="rounded-[24px] border border-sky-100 bg-gradient-to-br from-white to-sky-50/60 p-5 shadow-[0_15px_30px_-25px_rgba(15,76,129,0.35)]"
+                >
+                  <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-600">
+                          {price.division?.name ?? `División ${price.divisionId}`}
+                        </div>
+                        <span
+                          className={[
+                            'inline-flex rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em]',
+                            price.active
+                              ? 'bg-emerald-100 text-emerald-700'
+                              : 'bg-slate-200 text-slate-700',
+                          ].join(' ')}
                         >
-                          {updatingStatusId === price.id
-                            ? 'Actualizando...'
-                            : price.active
+                          {price.active ? 'Activo' : 'Inactivo'}
+                        </span>
+                      </div>
+
+                      <div className="mt-2 text-xl font-bold text-[#0F4C81]">
+                        {procedureLabel}
+                      </div>
+
+                      <div className="mt-1 text-sm font-semibold text-slate-700">
+                        {formatCurrency(price.price)}
+                      </div>
+
+                      <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-600">
+                        <span className="rounded-full border border-sky-100 bg-white px-3 py-1">
+                          ID: {price.id}
+                        </span>
+                        <span className="rounded-full border border-sky-100 bg-white px-3 py-1">
+                          Tipo ítem: {itemTypeLabel}
+                        </span>
+                        <span className="rounded-full border border-sky-100 bg-white px-3 py-1">
+                          Cobertura: {coverageLabel}
+                        </span>
+                        <span className="rounded-full border border-sky-100 bg-white px-3 py-1">
+                          Isapre: {price.isapre?.name ?? '-'}
+                        </span>
+                        <span className="rounded-full border border-sky-100 bg-white px-3 py-1">
+                          Plan: {price.isaprePlan?.name ?? '-'}
+                        </span>
+                        <span className="rounded-full border border-sky-100 bg-white px-3 py-1">
+                          Pagador / Fonasa: {payerLabel}
+                        </span>
+                        <span className="rounded-full border border-sky-100 bg-white px-3 py-1">
+                          Vigencia: {effectiveLabel}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleEdit(price)}
+                        className="rounded-2xl border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+                      >
+                        Editar
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleToggleStatus(price)}
+                        disabled={updatingStatusId === price.id}
+                        className="rounded-2xl border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
+                      >
+                        {updatingStatusId === price.id
+                          ? 'Actualizando...'
+                          : price.active
                             ? 'Desactivar'
                             : 'Activar'}
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+
+            {prices.length > ITEMS_PER_PAGE && (
+              <div className="flex flex-col gap-3 rounded-2xl border border-sky-100 bg-sky-50 px-4 py-4 text-sm text-slate-600 md:flex-row md:items-center md:justify-between">
+                <span>
+                  Mostrando {(currentPage - 1) * ITEMS_PER_PAGE + 1}-
+                  {Math.min(currentPage * ITEMS_PER_PAGE, prices.length)} de {prices.length}{' '}
+                  precios
+                </span>
+
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+                    disabled={currentPage === 1}
+                    className="rounded-2xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Anterior
+                  </button>
+
+                  <span className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-[#0F4C81]">
+                    Página {currentPage} de {totalPages}
+                  </span>
+
+                  <button
+                    type="button"
+                    onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
+                    disabled={currentPage === totalPages}
+                    className="rounded-2xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Siguiente
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         )}
+        </div>
       </section>
     </div>
   );

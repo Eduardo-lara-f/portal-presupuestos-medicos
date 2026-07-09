@@ -46,6 +46,7 @@ export default function PortalRightDrawer({
   const [open, setOpen] = useState(false);
   const [openEmission, setOpenEmission] = useState(false);
   const [openMaintainers, setOpenMaintainers] = useState(false);
+  const [openReports, setOpenReports] = useState(false);
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
 
   useEffect(() => {
@@ -54,6 +55,7 @@ export default function PortalRightDrawer({
     const savedMaintainers = localStorage.getItem(
       'portal_drawer_maintainers_open',
     );
+    const savedReports = localStorage.getItem('portal_drawer_reports_open');
 
     if (savedOpen !== null) {
       setOpen(savedOpen === 'true');
@@ -65,6 +67,10 @@ export default function PortalRightDrawer({
 
     if (savedMaintainers !== null) {
       setOpenMaintainers(savedMaintainers === 'true');
+    }
+
+    if (savedReports !== null) {
+      setOpenReports(savedReports === 'true');
     }
 
     const rawAuthUser = localStorage.getItem('authUser');
@@ -93,6 +99,10 @@ export default function PortalRightDrawer({
     );
   }, [openMaintainers]);
 
+  useEffect(() => {
+    localStorage.setItem('portal_drawer_reports_open', String(openReports));
+  }, [openReports]);
+
   const emissionLinks: DrawerLink[] = [
     { href: '/quotations', label: 'Presupuestos' },
     { href: '/quotations/new', label: 'Nueva emisión' },
@@ -106,6 +116,11 @@ export default function PortalRightDrawer({
   const canManageUsers =
     authUser?.role === 'SUPER_ADMIN' || authUser?.role === 'DIVISION_ADMIN';
 
+  const canSeeReports =
+    authUser?.role === 'SUPER_ADMIN' ||
+    authUser?.role === 'DIVISION_ADMIN' ||
+    authUser?.role === 'BUDGET_HEAD';
+
   const canSeePackages = authUser?.careAccess !== 'AMBULATORY';
 
   const maintainerLinks: DrawerLink[] = [
@@ -113,6 +128,7 @@ export default function PortalRightDrawer({
     { href: '/maintainers/supplies', label: 'Insumos' },
     { href: '/maintainers/drugs', label: 'Medicamentos' },
     { href: '/maintainers/beds', label: 'Días cama' },
+    { href: '/maintainers/medical-fees', label: 'Honorarios médicos' },
     { href: '/maintainers/prices', label: 'Precios' },
     { href: '/maintainers/baskets', label: 'Canastas' },
     ...(canSeePackages
@@ -122,6 +138,11 @@ export default function PortalRightDrawer({
       ? [{ href: '/maintainers/users', label: 'Usuarios' }]
       : []),
   ];
+
+  const reportLinks: DrawerLink[] = [
+    { href: '/reports', label: 'Resumen general' },
+  ];
+
   return (
     <>
       <button
@@ -146,7 +167,9 @@ export default function PortalRightDrawer({
             <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-sky-600">
               Portal clínico
             </p>
-            <h2 className="mt-1 text-lg font-semibold text-[#0F4C81]">Navegación</h2>
+            <h2 className="mt-1 text-lg font-semibold text-[#0F4C81]">
+              Navegación
+            </h2>
             <p className="mt-1 text-sm text-slate-600">
               Accesos rápidos para emisión y mantenedores.
             </p>
@@ -167,6 +190,16 @@ export default function PortalRightDrawer({
                 open={openMaintainers}
                 onToggle={() => setOpenMaintainers((prev) => !prev)}
                 links={maintainerLinks}
+                pathname={pathname}
+              />
+            )}
+
+            {canSeeReports && (
+              <DrawerGroup
+                title="Reportería"
+                open={openReports}
+                onToggle={() => setOpenReports((prev) => !prev)}
+                links={reportLinks}
                 pathname={pathname}
               />
             )}

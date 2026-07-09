@@ -3,7 +3,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { CareType, Prisma } from '@prisma/client';
+import { CareType, CatalogItemType, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateProcedureDto } from './dto/create-procedure.dto';
 import { UpdateProcedureDto } from './dto/update-procedure.dto';
@@ -17,6 +17,7 @@ export class ProceduresService {
     search?: string;
     careType?: CareType;
     category?: string;
+    itemType?: CatalogItemType;
     active?: boolean;
   }) {
     const where: Prisma.ProcedureWhereInput = {
@@ -33,6 +34,10 @@ export class ProceduresService {
 
     if (params.category?.trim()) {
       where.category = params.category.trim().toUpperCase();
+    }
+
+    if (params.itemType) {
+      where.itemType = params.itemType;
     }
 
     if (typeof params.active === 'boolean') {
@@ -113,6 +118,7 @@ export class ProceduresService {
         name,
         description: dto.description?.trim() || null,
         category: dto.category?.trim().toUpperCase() || null,
+        itemType: dto.itemType ?? CatalogItemType.PROCEDURE,
         careType: dto.careType ?? CareType.BOTH,
         active: true,
       },
@@ -172,6 +178,7 @@ export class ProceduresService {
           dto.category !== undefined
             ? dto.category?.trim().toUpperCase() || null
             : current.category,
+        itemType: dto.itemType ?? current.itemType,
         careType: dto.careType ?? current.careType,
         active: dto.active ?? current.active,
       },

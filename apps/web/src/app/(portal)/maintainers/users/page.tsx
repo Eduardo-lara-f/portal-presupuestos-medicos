@@ -65,6 +65,7 @@ const INITIAL_FORM: UserFormState = {
 
 const PAGE_SHELL =
   'mx-auto w-full max-w-[1400px] px-6 pb-10 pt-4 md:px-8 lg:px-10';
+const ITEMS_PER_PAGE = 10;
 
 const ROLE_OPTIONS: Array<{ value: UserRole; label: string }> = [
   { value: 'SUPER_ADMIN', label: 'Super admin' },
@@ -95,6 +96,7 @@ export default function MaintainersUsersPage() {
   const [statusFilter, setStatusFilter] = useState('true');
   const [roleFilter, setRoleFilter] = useState('');
   const [careAccessFilter, setCareAccessFilter] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
 
   const [editingUserId, setEditingUserId] = useState<number | null>(null);
   const [form, setForm] = useState<UserFormState>(INITIAL_FORM);
@@ -146,6 +148,10 @@ export default function MaintainersUsersPage() {
     void loadUsers();
   }, [selectedDivisionId, statusFilter, roleFilter, careAccessFilter]);
 
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [users.length, selectedDivisionId, search, statusFilter, roleFilter, careAccessFilter]);
+
   const pageTitle = useMemo(() => {
     return editingUserId ? 'Editar usuario' : 'Crear usuario';
   }, [editingUserId]);
@@ -153,6 +159,13 @@ export default function MaintainersUsersPage() {
   const currentRoleAllowsSegmentedCareAccess = useMemo(() => {
     return form.role === 'EXECUTIVE' || form.role === 'BUDGET_HEAD';
   }, [form.role]);
+
+  const totalPages = Math.max(1, Math.ceil(users.length / ITEMS_PER_PAGE));
+
+  const paginatedUsers = useMemo(() => {
+    const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
+    return users.slice(startIndex, startIndex + ITEMS_PER_PAGE);
+  }, [users, currentPage]);
 
   async function loadUsers() {
     try {
@@ -197,6 +210,7 @@ export default function MaintainersUsersPage() {
 
       const data: UserItem[] = await response.json();
       setUsers(data);
+      setCurrentPage(1);
     } catch (error) {
       console.error(error);
       setAlert({
@@ -639,7 +653,10 @@ export default function MaintainersUsersPage() {
                 <input
                   type="text"
                   value={search}
-                  onChange={(e) => setSearch(e.target.value)}
+                  onChange={(e) => {
+                    setSearch(e.target.value);
+                    setCurrentPage(1);
+                  }}
                   className="w-full rounded-2xl border border-sky-100 bg-white px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:ring-4 focus:ring-sky-100"
                   placeholder="Nombre o correo"
                 />
@@ -717,7 +734,7 @@ export default function MaintainersUsersPage() {
               </div>
             ) : (
               <div className="space-y-4">
-                {users.map((user) => (
+                {paginatedUsers.map((user) => (
                   <div
                     key={user.id}
                     className="rounded-[24px] border border-sky-100 bg-gradient-to-br from-white to-sky-50/60 p-5 shadow-[0_15px_30px_-25px_rgba(15,76,129,0.35)]"
@@ -778,6 +795,40 @@ export default function MaintainersUsersPage() {
                     </div>
                   </div>
                 ))}
+                {users.length > ITEMS_PER_PAGE && (
+                  <div className="flex flex-col gap-3 rounded-2xl border border-sky-100 bg-sky-50 px-4 py-4 text-sm text-slate-600 md:flex-row md:items-center md:justify-between">
+                    <span>
+                      Mostrando {(currentPage - 1) * ITEMS_PER_PAGE + 1}-
+                      {Math.min(currentPage * ITEMS_PER_PAGE, users.length)} de {users.length} usuarios
+                    </span>
+
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+                        disabled={currentPage === 1}
+                        className="rounded-2xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        Anterior
+                      </button>
+
+                      <span className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-[#0F4C81]">
+                        Página {currentPage} de {totalPages}
+                      </span>
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setCurrentPage((page) => Math.min(totalPages, page + 1))
+                        }
+                        disabled={currentPage === totalPages}
+                        className="rounded-2xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        Siguiente
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>

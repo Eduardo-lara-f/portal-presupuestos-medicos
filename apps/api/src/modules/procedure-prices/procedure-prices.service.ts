@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { CoverageType, Prisma } from '@prisma/client';
+import { CatalogItemType, CoverageType, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateProcedurePriceDto } from './dto/create-procedure-price.dto';
 import { UpdateProcedurePriceDto } from './dto/update-procedure-price.dto';
@@ -106,6 +106,13 @@ export class ProcedurePricesService {
       divisionId,
       coverages,
       isapres,
+      itemTypes: [
+        { value: CatalogItemType.PROCEDURE, label: 'Prestaciones' },
+        { value: CatalogItemType.SUPPLY, label: 'Insumos' },
+        { value: CatalogItemType.MEDICATION, label: 'Medicamentos' },
+        { value: CatalogItemType.BED_DAY, label: 'Día cama' },
+        { value: CatalogItemType.MEDICAL_FEE, label: 'Honorarios médicos' },
+      ],
     };
   }
 
@@ -188,6 +195,7 @@ export class ProcedurePricesService {
   async findAll(params: {
     divisionId?: number;
     procedureId?: number;
+    itemType?: CatalogItemType;
     coverageType?: CoverageType;
     active?: boolean;
     search?: string;
@@ -202,6 +210,12 @@ export class ProcedurePricesService {
 
     if (params.procedureId) {
       where.procedureId = params.procedureId;
+    }
+
+    if (params.itemType) {
+      where.procedure = {
+        itemType: params.itemType,
+      };
     }
 
     if (params.coverageType) {
@@ -267,6 +281,7 @@ export class ProcedurePricesService {
             id: true,
             code: true,
             name: true,
+            itemType: true,
             careType: true,
             active: true,
           },
@@ -308,6 +323,7 @@ export class ProcedurePricesService {
             id: true,
             code: true,
             name: true,
+            itemType: true,
             careType: true,
             active: true,
           },
@@ -467,6 +483,7 @@ export class ProcedurePricesService {
             id: true,
             code: true,
             name: true,
+            itemType: true,
             careType: true,
             active: true,
           },
@@ -546,6 +563,7 @@ export class ProcedurePricesService {
             id: true,
             code: true,
             name: true,
+            itemType: true,
             careType: true,
             active: true,
           },
@@ -596,6 +614,7 @@ export class ProcedurePricesService {
             id: true,
             code: true,
             name: true,
+            itemType: true,
             careType: true,
             active: true,
           },

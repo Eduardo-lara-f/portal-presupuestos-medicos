@@ -9,7 +9,7 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
-import { CareType } from '@prisma/client';
+import { CareType, CatalogItemType } from '@prisma/client';
 import { CreateProcedureDto } from './dto/create-procedure.dto';
 import { UpdateProcedureStatusDto } from './dto/update-procedure-status.dto';
 import { UpdateProcedureDto } from './dto/update-procedure.dto';
@@ -25,6 +25,7 @@ async findAll(
   @Query('search') search?: string,
   @Query('careType') careType?: CareType,
   @Query('category') category?: string,
+  @Query('itemType') itemType?: string,
   @Query('active') active?: string,
 ) {
   const parsedActive: boolean | undefined =
@@ -36,11 +37,17 @@ async findAll(
       ? false
       : undefined;
 
+  const parsedItemType =
+    itemType && Object.values(CatalogItemType).includes(itemType as CatalogItemType)
+      ? (itemType as CatalogItemType)
+      : undefined;
+
   return this.proceduresService.findAll({
     divisionId: divisionId ? Number(divisionId) : undefined,
     search,
     careType,
     category,
+    itemType: parsedItemType,
     active: parsedActive,
   });
 }

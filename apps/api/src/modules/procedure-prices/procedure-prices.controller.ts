@@ -9,7 +9,7 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
-import { CoverageType } from '@prisma/client';
+import { CatalogItemType, CoverageType } from '@prisma/client';
 import { CreateProcedurePriceDto } from './dto/create-procedure-price.dto';
 import { UpdateProcedurePriceDto } from './dto/update-procedure-price.dto';
 import { UpdateProcedurePriceStatusDto } from './dto/update-procedure-price-status.dto';
@@ -48,6 +48,7 @@ export class ProcedurePricesController {
   async findAll(
     @Query('divisionId') divisionId?: string,
     @Query('procedureId') procedureId?: string,
+    @Query('itemType') itemType?: string,
     @Query('coverageType') coverageType?: string,
     @Query('active') active?: string,
     @Query('search') search?: string,
@@ -66,9 +67,15 @@ export class ProcedurePricesController {
         ? (coverageType as CoverageType)
         : undefined;
 
+    const parsedItemType =
+      itemType && Object.values(CatalogItemType).includes(itemType as CatalogItemType)
+        ? (itemType as CatalogItemType)
+        : undefined;
+
     return this.procedurePricesService.findAll({
       divisionId: divisionId ? Number(divisionId) : undefined,
       procedureId: procedureId ? Number(procedureId) : undefined,
+      itemType: parsedItemType,
       coverageType: parsedCoverageType,
       active: parsedActive,
       search,

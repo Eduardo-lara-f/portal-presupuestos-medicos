@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 
@@ -409,6 +410,23 @@ export default function QuotationsPage() {
                           value={formatCurrency(quote.total)}
                         />
                       </div>
+                    </div>
+                    <div className="mt-5 flex flex-wrap items-center justify-end gap-3">
+                      {quote.status === 'DRAFT' ? (
+                        <Link
+                          href={`/quotations/new?quoteId=${quote.id}`}
+                          className="rounded-2xl bg-[#0F4C81] px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-[#0b3b63]"
+                        >
+                          Retomar presupuesto
+                        </Link>
+                      ) : (
+                        <Link
+                          href={`/quotations/new?quoteId=${quote.id}&mode=view`}
+                          className="rounded-2xl border border-sky-200 bg-white px-5 py-3 text-sm font-semibold text-[#0F4C81] shadow-sm transition hover:bg-sky-50"
+                        >
+                          Ver detalle
+                        </Link>
+                      )}
                     </div>
                   </div>
                 ))}

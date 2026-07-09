@@ -1,11 +1,24 @@
 'use client';
 
 import React, { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 
 type CareType = 'AMBULATORY' | 'SURGICAL' | 'BOTH';
 type CareAccess = 'AMBULATORY' | 'SURGICAL' | 'BOTH';
 type Step = 0 | 1 | 2 | 3;
-type BillingSection = 'PROCEDURE' | 'SUPPLY' | 'DRUG' | 'BED';
+type CatalogItemType =
+  | 'PROCEDURE'
+  | 'SUPPLY'
+  | 'MEDICATION'
+  | 'BED_DAY'
+  | 'MEDICAL_FEE';
+
+type BillingSection =
+  | 'PROCEDURE'
+  | 'SUPPLY'
+  | 'DRUG'
+  | 'BED'
+  | 'MEDICAL_FEE';
 type CoverageType = 'ISAPRE_PLAN' | 'FONASA' | 'PARTICULAR' | 'OTHER';
 
 type Division = {
@@ -59,7 +72,6 @@ type CoverageCatalogResponse = {
   coverages: CoverageCatalogItem[];
   isapres: Isapre[];
 };
-
 type Procedure = {
   id: number;
   divisionId: number;
@@ -67,6 +79,7 @@ type Procedure = {
   name: string;
   description?: string | null;
   category?: string | null;
+  itemType?: CatalogItemType | null;
   careType: CareType;
   active: boolean;
 };
@@ -156,11 +169,32 @@ type QuoteItemResponse = {
 
 type QuoteResponse = {
   id: number;
+  divisionId: number;
+  patientId: number;
+  coverageType: CoverageType;
+  isapreId?: number | null;
+  isaprePlanId?: number | null;
+  fonasaCode?: string | null;
+  payerLabel?: string | null;
+  careType: CareType;
+  status: string;
+  validityDays: number;
+  subtotal: string | number;
+  discountTotal: string | number;
+  total: string | number;
+  notes?: string | null;
+  patient?: PatientResponse | null;
   items: QuoteItemResponse[];
 };
 
-type BudgetSourceType = 'PROCEDURE' | 'BASKET' | 'PACKAGE' | 'MEDICAL_FEE';
-
+type BudgetSourceType =
+  | 'PROCEDURE'
+  | 'SUPPLY'
+  | 'MEDICATION'
+  | 'BED_DAY'
+  | 'MEDICAL_FEE'
+  | 'BASKET'
+  | 'PACKAGE';
 type BudgetItem = {
   localId: string;
   quoteItemId?: number | null;
@@ -233,6 +267,19 @@ type AddedGroupSummary = {
   itemCount: number;
 };
 
+type CatalogFinderConfig = {
+  section: BillingSection;
+  itemType: CatalogItemType;
+  search: string;
+  results: Procedure[];
+  loading: boolean;
+  addingId: number | null;
+  setSearch: React.Dispatch<React.SetStateAction<string>>;
+  title: string;
+  placeholder: string;
+  emptyMessage: string;
+};
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 const SECONDARY_SECTION_FACTOR = 0.5;
 
@@ -242,7 +289,13 @@ function roundPrice(value: number) {
 
 function applySectionBillingRule(items: BudgetItem[]): BudgetItem[] {
   const factorByLocalId = new Map<string, number>();
-  const sections: BillingSection[] = ['PROCEDURE', 'SUPPLY', 'DRUG', 'BED'];
+  const sections: BillingSection[] = [
+  'PROCEDURE',
+  'SUPPLY',
+  'DRUG',
+  'BED',
+  'MEDICAL_FEE',
+];
 
   for (const section of sections) {
     const sorted = items
@@ -285,16 +338,52 @@ function formatCurrency(value: number) {
 }
 
 function resolveBillingSectionFromProcedure(procedure: Procedure): BillingSection {
+  const itemType = procedure.itemType?.trim().toUpperCase();
+
+  if (itemType === 'SUPPLY') return 'SUPPLY';
+  if (itemType === 'MEDICATION') return 'DRUG';
+  if (itemType === 'BED_DAY') return 'BED';
+  if (itemType === 'MEDICAL_FEE') return 'MEDICAL_FEE';
+
   const category = procedure.category?.trim().toUpperCase();
 
   if (category === 'SUPPLY') return 'SUPPLY';
   if (category === 'DRUG') return 'DRUG';
   if (category === 'BED') return 'BED';
+  if (category === 'MEDICAL_FEE') return 'MEDICAL_FEE';
 
   return 'PROCEDURE';
 }
 
+function resolveSourceTypeFromProcedure(
+  procedure: Procedure,
+): Exclude<BudgetSourceType, 'BASKET' | 'PACKAGE'> {
+  const itemType = procedure.itemType?.trim().toUpperCase();
+
+  if (itemType === 'SUPPLY') return 'SUPPLY';
+  if (itemType === 'MEDICATION') return 'MEDICATION';
+  if (itemType === 'BED_DAY') return 'BED_DAY';
+  if (itemType === 'MEDICAL_FEE') return 'MEDICAL_FEE';
+
+  const category = procedure.category?.trim().toUpperCase();
+
+  if (category === 'SUPPLY') return 'SUPPLY';
+  if (category === 'DRUG') return 'MEDICATION';
+  if (category === 'BED') return 'BED_DAY';
+  if (category === 'MEDICAL_FEE') return 'MEDICAL_FEE';
+
+  return 'PROCEDURE';
+}
+
+function resolveQuoteItemTypeFromProcedure(
+  procedure: Procedure,
+): 'PROCEDURE' | 'SUPPLY' | 'MEDICATION' | 'BED_DAY' | 'MEDICAL_FEE' {
+  return resolveSourceTypeFromProcedure(procedure);
+}
+
 export default function NewQuotationPage() {
+  const searchParams = useSearchParams();
+  const quoteIdFromUrl = searchParams.get('quoteId');
   const [careType, setCareType] = useState<CareType | null>(null);
   const [currentStep, setCurrentStep] = useState<Step>(0);
 
@@ -337,6 +426,26 @@ export default function NewQuotationPage() {
   const [loadingProcedures, setLoadingProcedures] = useState(false);
   const [addingProcedureId, setAddingProcedureId] = useState<number | null>(null);
 
+  const [supplySearch, setSupplySearch] = useState('');
+  const [supplyResults, setSupplyResults] = useState<Procedure[]>([]);
+  const [loadingSupplies, setLoadingSupplies] = useState(false);
+  const [addingSupplyId, setAddingSupplyId] = useState<number | null>(null);
+
+  const [drugSearch, setDrugSearch] = useState('');
+  const [drugResults, setDrugResults] = useState<Procedure[]>([]);
+  const [loadingDrugs, setLoadingDrugs] = useState(false);
+  const [addingDrugId, setAddingDrugId] = useState<number | null>(null);
+
+  const [bedSearch, setBedSearch] = useState('');
+  const [bedResults, setBedResults] = useState<Procedure[]>([]);
+  const [loadingBeds, setLoadingBeds] = useState(false);
+  const [addingBedId, setAddingBedId] = useState<number | null>(null);
+
+  const [medicalFeeSearch, setMedicalFeeSearch] = useState('');
+  const [medicalFeeResults, setMedicalFeeResults] = useState<Procedure[]>([]);
+  const [loadingMedicalFees, setLoadingMedicalFees] = useState(false);
+  const [addingMedicalFeeId, setAddingMedicalFeeId] = useState<number | null>(null);
+
   const [basketSearch, setBasketSearch] = useState('');
   const [basketResults, setBasketResults] = useState<BasketResponse[]>([]);
   const [loadingBaskets, setLoadingBaskets] = useState(false);
@@ -362,6 +471,10 @@ export default function NewQuotationPage() {
   const [discountTotal, setDiscountTotal] = useState('0');
   const [notes, setNotes] = useState('');
   const [generatingPdf, setGeneratingPdf] = useState(false);
+  const [sendingPdfEmail, setSendingPdfEmail] = useState(false);
+  const [sendingPdfWhatsApp, setSendingPdfWhatsApp] = useState(false);
+  const [loadingExistingQuote, setLoadingExistingQuote] = useState(false);
+  const [loadedQuoteId, setLoadedQuoteId] = useState<number | null>(null);
 
   const [quoteId, setQuoteId] = useState<number | null>(null);
   const [createdByUserId, setCreatedByUserId] = useState<number | null>(null);
@@ -407,6 +520,90 @@ export default function NewQuotationPage() {
       console.error(error);
     }
   }, []);
+
+  useEffect(() => {
+    async function loadExistingQuote() {
+      if (!quoteIdFromUrl || loadedQuoteId === Number(quoteIdFromUrl)) {
+        return;
+      }
+
+      const parsedQuoteId = Number(quoteIdFromUrl);
+
+      if (!Number.isFinite(parsedQuoteId)) {
+        setAlert({
+          type: 'error',
+          message: 'El identificador de la cotización no es válido.',
+        });
+        return;
+      }
+
+      try {
+        setLoadingExistingQuote(true);
+        setAlert(null);
+
+        const response = await fetch(`${API_URL}/quotes/${parsedQuoteId}`);
+
+        if (!response.ok) {
+          throw new Error(
+            await getApiErrorMessage(
+              response,
+              'No se pudo cargar la cotización seleccionada.',
+            ),
+          );
+        }
+
+        const quote = await safeParseJson<QuoteResponse>(response);
+
+        if (!quote) {
+          throw new Error('La API no devolvió la cotización seleccionada.');
+        }
+
+        setLoadedQuoteId(quote.id);
+        setQuoteId(quote.id);
+        setCareType(quote.careType);
+        setCurrentStep(2);
+        setSelectedCoverageType(quote.coverageType);
+        setSelectedIsapreId(quote.isapreId ? String(quote.isapreId) : '');
+        setSelectedPlanId(quote.isaprePlanId ? String(quote.isaprePlanId) : '');
+        setFonasaCode(quote.fonasaCode ?? '');
+        setPayerLabel(quote.payerLabel ?? '');
+        setDiscountTotal(String(quote.discountTotal ?? 0));
+        setNotes(quote.notes ?? '');
+        setPatientId(quote.patientId);
+        setPatientFound(true);
+
+        if (quote.patient) {
+          setRut(formatRut(quote.patient.rut ?? ''));
+          setFirstName(quote.patient.firstName ?? '');
+          setLastName(quote.patient.lastName ?? '');
+          setMiddleName(quote.patient.middleName ?? '');
+          setEmail(quote.patient.email ?? '');
+          setPhone(quote.patient.phone ?? '');
+          setAddress(quote.patient.address ?? '');
+        }
+
+        setBudgetItems(mapQuoteItemsToBudgetItems(quote.items ?? []));
+
+        setAlert({
+          type: 'success',
+          message: `Cotización #${quote.id} cargada correctamente para continuar.`,
+        });
+      } catch (error) {
+        console.error(error);
+        setAlert({
+          type: 'error',
+          message:
+            error instanceof Error
+              ? error.message
+              : 'No se pudo cargar la cotización seleccionada.',
+        });
+      } finally {
+        setLoadingExistingQuote(false);
+      }
+    }
+
+    loadExistingQuote();
+  }, [quoteIdFromUrl, loadedQuoteId]);
 
   useEffect(() => {
     if (!alert) return;
@@ -627,8 +824,96 @@ export default function NewQuotationPage() {
       SUPPLY: getTotal('SUPPLY'),
       DRUG: getTotal('DRUG'),
       BED: getTotal('BED'),
+      MEDICAL_FEE: getTotal('MEDICAL_FEE'),
     };
   }, [budgetItems]);
+
+  const catalogFinders = useMemo<CatalogFinderConfig[]>(
+    () => [
+      {
+        section: 'PROCEDURE',
+        itemType: 'PROCEDURE',
+        search: procedureSearch,
+        results: procedureResults,
+        loading: loadingProcedures,
+        addingId: addingProcedureId,
+        setSearch: setProcedureSearch,
+        title: 'Prestaciones',
+        placeholder: 'Buscar prestación por código o nombre',
+        emptyMessage: 'No se encontraron prestaciones para la búsqueda realizada.',
+      },
+      {
+        section: 'SUPPLY',
+        itemType: 'SUPPLY',
+        search: supplySearch,
+        results: supplyResults,
+        loading: loadingSupplies,
+        addingId: addingSupplyId,
+        setSearch: setSupplySearch,
+        title: 'Insumos',
+        placeholder: 'Buscar insumo por código o nombre',
+        emptyMessage: 'No se encontraron insumos para la búsqueda realizada.',
+      },
+      {
+        section: 'DRUG',
+        itemType: 'MEDICATION',
+        search: drugSearch,
+        results: drugResults,
+        loading: loadingDrugs,
+        addingId: addingDrugId,
+        setSearch: setDrugSearch,
+        title: 'Medicamentos',
+        placeholder: 'Buscar medicamento por código o nombre',
+        emptyMessage: 'No se encontraron medicamentos para la búsqueda realizada.',
+      },
+      {
+        section: 'BED',
+        itemType: 'BED_DAY',
+        search: bedSearch,
+        results: bedResults,
+        loading: loadingBeds,
+        addingId: addingBedId,
+        setSearch: setBedSearch,
+        title: 'Día cama',
+        placeholder: 'Buscar día cama por código o nombre',
+        emptyMessage: 'No se encontraron días cama para la búsqueda realizada.',
+      },
+      {
+        section: 'MEDICAL_FEE',
+        itemType: 'MEDICAL_FEE',
+        search: medicalFeeSearch,
+        results: medicalFeeResults,
+        loading: loadingMedicalFees,
+        addingId: addingMedicalFeeId,
+        setSearch: setMedicalFeeSearch,
+        title: 'Honorarios médicos',
+        placeholder: 'Buscar honorario médico por código o nombre',
+        emptyMessage: 'No se encontraron honorarios médicos para la búsqueda realizada.',
+      },
+    ],
+    [
+      procedureSearch,
+      procedureResults,
+      loadingProcedures,
+      addingProcedureId,
+      supplySearch,
+      supplyResults,
+      loadingSupplies,
+      addingSupplyId,
+      drugSearch,
+      drugResults,
+      loadingDrugs,
+      addingDrugId,
+      bedSearch,
+      bedResults,
+      loadingBeds,
+      addingBedId,
+      medicalFeeSearch,
+      medicalFeeResults,
+      loadingMedicalFees,
+      addingMedicalFeeId,
+    ],
+  );
 
   const addedGroups = useMemo(() => {
     const groups = new Map<string, AddedGroupSummary>();
@@ -1076,6 +1361,63 @@ export default function NewQuotationPage() {
     };
   }
 
+  function mapQuoteItemsToBudgetItems(items: QuoteItemResponse[]): BudgetItem[] {
+    const rootItemsById = new Map<number, QuoteItemResponse>();
+
+    items.forEach((item) => {
+      if (!item.parentId) {
+        rootItemsById.set(item.id, item);
+      }
+    });
+
+    return items
+      .filter((item) => item.type !== 'BASKET' && item.type !== 'PACKAGE')
+      .map((item) => {
+        const parent = item.parentId ? rootItemsById.get(item.parentId) : null;
+        const parentGroupType =
+          parent?.type === 'BASKET' || parent?.type === 'PACKAGE'
+            ? parent.type
+            : null;
+
+        return {
+          localId: `QUOTEITEM-${item.id}`,
+          quoteItemId: item.id,
+          sourceId: item.sourceId,
+          sourceType:
+            item.type === 'MEDICAL_FEE'
+              ? 'MEDICAL_FEE'
+              : (item.sourceType as BudgetSourceType),
+          parentGroupId: parent?.id ?? null,
+          parentGroupKey: parent ? `${parent.type}-${parent.id}` : null,
+          parentGroupType,
+          parentGroupName: parent?.description ?? null,
+          lockedByPackage: parent?.type === 'PACKAGE',
+          section:
+            item.type === 'MEDICAL_FEE'
+              ? 'PROCEDURE'
+              : resolveBillingSectionFromProcedure({
+                  id: Number(item.sourceId),
+                  divisionId: 0,
+                  code: String(item.sourceId ?? '-'),
+                  name: item.description,
+                  category: null,
+                  careType: 'BOTH',
+                  active: true,
+                }),
+          code:
+            item.type === 'MEDICAL_FEE'
+              ? 'HONORARIO'
+              : String(item.sourceId ?? '-'),
+          name: item.description,
+          quantity: Number(item.quantity),
+          basePrice: Number(item.unitPrice),
+          appliedFactor: parent?.type === 'PACKAGE' ? 1 : 1,
+          unitPrice: Number(item.unitPrice),
+          totalPrice: Number(item.totalPrice),
+        };
+      });
+  }
+
   function buildQuoteCoveragePayload() {
     const base = {
       coverageType: selectedCoverageType,
@@ -1359,11 +1701,11 @@ export default function NewQuotationPage() {
     return packageResult;
   }
 
-  async function handleSearchProcedures() {
+  async function handleSearchCatalogItems(config: CatalogFinderConfig) {
     if (!selectedDivisionId) {
       setAlert({
         type: 'warning',
-        message: 'Seleccione una división antes de buscar prestaciones.',
+        message: `Seleccione una división antes de buscar ${config.title.toLowerCase()}.`,
       });
       return;
     }
@@ -1377,52 +1719,82 @@ export default function NewQuotationPage() {
       return;
     }
 
-    if (!procedureSearch.trim()) {
+    if (!config.search.trim()) {
       setAlert({
         type: 'warning',
-        message: 'Ingrese un nombre o código para buscar prestaciones.',
+        message: `Ingrese un nombre o código para buscar ${config.title.toLowerCase()}.`,
       });
       return;
     }
 
+    const setLoadingBySection: Record<
+      BillingSection,
+      React.Dispatch<React.SetStateAction<boolean>>
+    > = {
+      PROCEDURE: setLoadingProcedures,
+      SUPPLY: setLoadingSupplies,
+      DRUG: setLoadingDrugs,
+      BED: setLoadingBeds,
+      MEDICAL_FEE: setLoadingMedicalFees,
+    };
+
+    const setResultsBySection: Record<
+      BillingSection,
+      React.Dispatch<React.SetStateAction<Procedure[]>>
+    > = {
+      PROCEDURE: setProcedureResults,
+      SUPPLY: setSupplyResults,
+      DRUG: setDrugResults,
+      BED: setBedResults,
+      MEDICAL_FEE: setMedicalFeeResults,
+    };
+
     try {
-      setLoadingProcedures(true);
+      setLoadingBySection[config.section](true);
       setAlert(null);
 
       const params = new URLSearchParams({
         divisionId: selectedDivisionId,
-        search: procedureSearch.trim(),
-        category: 'PROCEDURE',
+        search: config.search.trim(),
+        itemType: config.itemType,
         active: 'true',
       });
 
       const response = await fetch(`${API_URL}/procedures?${params.toString()}`);
       if (!response.ok) {
-        throw new Error('No se pudieron cargar las prestaciones.');
+        throw new Error(`No se pudieron cargar ${config.title.toLowerCase()}.`);
       }
 
       const data: Procedure[] = await response.json();
       const filtered = careType
         ? data.filter((item) => item.careType === careType || item.careType === 'BOTH')
         : data;
-      setProcedureResults(filtered);
+
+      setResultsBySection[config.section](filtered);
 
       if (!filtered.length) {
         setAlert({
           type: 'info',
-          message:
-            'No se encontraron prestaciones para la búsqueda realizada y la modalidad seleccionada.',
+          message: config.emptyMessage,
         });
       }
     } catch (error) {
       console.error(error);
       setAlert({
         type: 'error',
-        message: 'Ocurrió un error al buscar prestaciones.',
+        message: `Ocurrió un error al buscar ${config.title.toLowerCase()}.`,
       });
     } finally {
-      setLoadingProcedures(false);
+      setLoadingBySection[config.section](false);
     }
+  }
+
+  async function handleSearchProcedures() {
+    const procedureFinder = catalogFinders.find(
+      (finder) => finder.section === 'PROCEDURE',
+    );
+    if (!procedureFinder) return;
+    await handleSearchCatalogItems(procedureFinder);
   }
 
   async function handleSearchBaskets() {
@@ -2078,7 +2450,6 @@ export default function NewQuotationPage() {
       });
       return;
     }
-
     if (!budgetItems.length) {
       setAlert({
         type: 'warning',
@@ -2090,6 +2461,8 @@ export default function NewQuotationPage() {
     try {
       setGeneratingPdf(true);
       setAlert(null);
+
+      const currentQuoteId = await ensureDraftQuote();
 
       const patientFullName = [firstName, lastName, middleName]
         .filter((value) => value.trim())
@@ -2106,7 +2479,7 @@ export default function NewQuotationPage() {
       }));
 
       const payload = {
-        quotationNumber: quoteId ? `COT-${quoteId}` : `BORRADOR-${Date.now()}`,
+        quotationNumber: `COT-${currentQuoteId}`,
         divisionName: selectedDivisionName || '-',
         careType,
         patient: {
@@ -2145,46 +2518,204 @@ export default function NewQuotationPage() {
 
       console.log('PDF payload JSON:', JSON.stringify(payload, null, 2));
 
-      const response = await fetch(`${API_URL}/pdf/budget`, {
+      const response = await fetch(`${API_URL}/pdf/budget/upload`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({
+          quoteId: currentQuoteId,
+          divisionId: Number(selectedDivisionId),
+          createdAt: new Date().toISOString(),
+          data: payload,
+        }),
       });
 
       if (!response.ok) {
         const errorText = await response.text();
-        console.error('PDF status:', response.status);
-        console.error('PDF error body:', errorText);
+        console.error('PDF S3 status:', response.status);
+        console.error('PDF S3 error body:', errorText);
         console.error('PDF payload:', payload);
         console.error('PDF payload JSON:', JSON.stringify(payload, null, 2));
-        throw new Error(`No se pudo generar el PDF. Código: ${response.status}`);
+        throw new Error(`No se pudo generar y guardar el PDF. Código: ${response.status}`);
       }
 
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-      const link = document.createElement('a');
+      const uploadResult = await safeParseJson<{
+        key: string;
+        signedUrl: string;
+        expiresInSeconds: number;
+      }>(response);
 
-      link.href = url;
-      link.download = `presupuesto_${Date.now()}.pdf`;
+      if (!uploadResult?.key || !uploadResult.signedUrl) {
+        throw new Error('La API no devolvió la referencia del PDF generado.');
+      }
+
+      const referenceResponse = await fetch(
+        `${API_URL}/quotes/${currentQuoteId}/pdf-reference`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pdfS3Key: uploadResult.key }),
+        },
+      );
+
+      if (!referenceResponse.ok) {
+        throw new Error(
+          await getApiErrorMessage(
+            referenceResponse,
+            'No se pudo guardar la referencia del PDF en la cotización.',
+          ),
+        );
+      }
+
+      const statusResponse = await fetch(
+        `${API_URL}/quotes/${currentQuoteId}/status`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: 'FINALIZED' }),
+        },
+      );
+
+      if (!statusResponse.ok) {
+        throw new Error(
+          await getApiErrorMessage(
+            statusResponse,
+            'El PDF fue generado, pero no se pudo emitir el presupuesto.',
+          ),
+        );
+      }
+
+      const link = document.createElement('a');
+      link.href = uploadResult.signedUrl;
+      link.download = `presupuesto_${currentQuoteId}.pdf`;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
       document.body.appendChild(link);
       link.click();
       link.remove();
-      window.URL.revokeObjectURL(url);
 
       setAlert({
         type: 'success',
-        message: 'El PDF fue generado y descargado correctamente.',
-      });
-    } catch (error) {
-      console.error(error);
-      setAlert({
-        type: 'error',
-        message: 'Ocurrió un error al generar el PDF del presupuesto.',
+        message: 'El presupuesto fue emitido, guardado en S3 y descargado correctamente.',
       });
     } finally {
       setGeneratingPdf(false);
     }
   }
+
+  async function handleSendPdfByEmail() {
+    const currentQuoteId = quoteId;
+
+    if (!currentQuoteId) {
+      setAlert({
+        type: 'warning',
+        message: 'Primero debe emitir el presupuesto para generar el PDF.',
+      });
+      return;
+    }
+
+    if (!email.trim()) {
+      setAlert({
+        type: 'warning',
+        message: 'El paciente no tiene correo electrónico registrado.',
+      });
+      return;
+    }
+
+    try {
+      setSendingPdfEmail(true);
+      setAlert(null);
+
+      const response = await fetch(`${API_URL}/quotes/${currentQuoteId}/send-pdf`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ to: email.trim() }),
+      });
+
+      if (!response.ok) {
+        throw new Error(
+          await getApiErrorMessage(
+            response,
+            'No se pudo enviar el presupuesto por correo.',
+          ),
+        );
+      }
+
+      setAlert({
+        type: 'success',
+        message: `Presupuesto enviado correctamente a ${email.trim()}.`,
+      });
+    } catch (error) {
+      console.error(error);
+      setAlert({
+        type: 'error',
+        message:
+          error instanceof Error
+            ? error.message
+            : 'Ocurrió un error al enviar el presupuesto por correo.',
+      });
+    } finally {
+      setSendingPdfEmail(false);
+    }
+  }
+
+  async function handleSendPdfByWhatsApp() {
+  const currentQuoteId = quoteId;
+
+  if (!currentQuoteId) {
+    setAlert({
+      type: 'warning',
+      message: 'Primero debe emitir el presupuesto para generar el PDF.',
+    });
+    return;
+  }
+
+  if (!phone.trim()) {
+    setAlert({
+      type: 'warning',
+      message: 'El paciente no tiene teléfono registrado.',
+    });
+    return;
+  }
+
+  try {
+    setSendingPdfWhatsApp(true);
+    setAlert(null);
+
+    const response = await fetch(
+      `${API_URL}/quotes/${currentQuoteId}/send-pdf-whatsapp`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ to: phone.trim() }),
+      },
+    );
+
+    if (!response.ok) {
+      throw new Error(
+        await getApiErrorMessage(
+          response,
+          'No se pudo enviar el presupuesto por WhatsApp.',
+        ),
+      );
+    }
+
+    setAlert({
+      type: 'success',
+      message: `Presupuesto enviado correctamente por WhatsApp a ${phone.trim()}.`,
+    });
+  } catch (error) {
+    console.error(error);
+    setAlert({
+      type: 'error',
+      message:
+        error instanceof Error
+          ? error.message
+          : 'Ocurrió un error al enviar el presupuesto por WhatsApp.',
+    });
+  } finally {
+    setSendingPdfWhatsApp(false);
+  }
+}
 
   async function handlePrimaryAction(event?: React.MouseEvent<HTMLButtonElement>) {
     event?.preventDefault();
@@ -2259,6 +2790,12 @@ export default function NewQuotationPage() {
           </div>
 
           <div className="p-5 md:p-7">
+            {loadingExistingQuote && (
+              <div className="mb-5 rounded-2xl border border-sky-100 bg-sky-50 px-4 py-3 text-sm font-semibold text-[#0F4C81]">
+                Cargando presupuesto pendiente...
+              </div>
+            )}
+
             {currentStep === 0 && (
               <InitialCareTypeStep
                 careType={careType}
@@ -2471,6 +3008,8 @@ export default function NewQuotationPage() {
                 handleSearchProcedures={handleSearchProcedures}
                 handleAddProcedure={handleAddProcedure}
                 addingProcedureId={addingProcedureId}
+                catalogFinders={catalogFinders}
+                handleSearchCatalogItems={handleSearchCatalogItems}
                 basketSearch={basketSearch}
                 setBasketSearch={setBasketSearch}
                 loadingBaskets={loadingBaskets}
@@ -2524,29 +3063,47 @@ export default function NewQuotationPage() {
             )}
 
             {currentStep > 0 && (
-              <div className="mt-8 flex items-center justify-between border-t border-[var(--brand-secondary-soft)] pt-6">
-                <button onClick={goToPrevStep} className="btn-health-secondary">
-                  Volver
-                </button>
+              <div className="flex items-center gap-3">
+  {currentStep === 3 && (
+    <>
+      <button
+        type="button"
+        onClick={handleSendPdfByEmail}
+        disabled={savingPatient || generatingPdf || sendingPdfEmail || !quoteId}
+        className="btn-health-secondary"
+      >
+        {sendingPdfEmail ? 'Enviando correo...' : 'Enviar por correo'}
+      </button>
 
-                <button
-                  onClick={handlePrimaryAction}
-                  disabled={savingPatient || generatingPdf}
-                  className="btn-health-primary"
-                >
-                  {currentStep === 1
-                    ? savingPatient
-                      ? 'Guardando paciente...'
-                      : 'Continuar'
-                    : currentStep === 2
-                    ? 'Ir a resumen'
-                    : currentStep === 3
-                    ? generatingPdf
-                      ? 'Generando PDF...'
-                      : 'Emitir presupuesto'
-                    : 'Continuar'}
-                </button>
-              </div>
+      <button
+        type="button"
+        onClick={handleSendPdfByWhatsApp}
+        disabled={savingPatient || generatingPdf || sendingPdfWhatsApp || !quoteId}
+        className="btn-health-secondary"
+      >
+        {sendingPdfWhatsApp ? 'Enviando WhatsApp...' : 'Enviar por WhatsApp'}
+      </button>
+    </>
+  )}
+
+  <button
+    onClick={handlePrimaryAction}
+    disabled={savingPatient || generatingPdf || sendingPdfEmail}
+    className="btn-health-primary"
+  >
+    {currentStep === 1
+      ? savingPatient
+        ? 'Guardando paciente...'
+        : 'Continuar'
+      : currentStep === 2
+      ? 'Ir a resumen'
+      : currentStep === 3
+      ? generatingPdf
+        ? 'Generando PDF...'
+        : 'Emitir presupuesto'
+      : 'Continuar'}
+  </button>
+</div>
             )}
           </div>
         </section>
@@ -2824,6 +3381,8 @@ function BudgetStep({
   handleSearchProcedures,
   handleAddProcedure,
   addingProcedureId,
+  catalogFinders,
+  handleSearchCatalogItems,
   basketSearch,
   setBasketSearch,
   loadingBaskets,
@@ -2863,6 +3422,8 @@ function BudgetStep({
   handleSearchProcedures: () => Promise<void>;
   handleAddProcedure: (procedure: Procedure) => Promise<void>;
   addingProcedureId: number | null;
+  catalogFinders: CatalogFinderConfig[];
+  handleSearchCatalogItems: (config: CatalogFinderConfig) => Promise<void>;
   basketSearch: string;
   setBasketSearch: React.Dispatch<React.SetStateAction<string>>;
   loadingBaskets: boolean;
@@ -2899,6 +3460,7 @@ function BudgetStep({
   const supplyItems = budgetItems.filter((item) => item.section === 'SUPPLY');
   const drugItems = budgetItems.filter((item) => item.section === 'DRUG');
   const bedItems = budgetItems.filter((item) => item.section === 'BED');
+  const medicalFeeItems = budgetItems.filter((item) => item.section === 'MEDICAL_FEE');
   const packageSearchEnabled = careType === 'SURGICAL';
 
   return (
@@ -2931,52 +3493,15 @@ function BudgetStep({
           )}
         </div>
 
-        <div className="grid gap-3 md:grid-cols-[1fr_auto]">
-          <input
-            type="text"
-            value={procedureSearch}
-            onChange={(e) => setProcedureSearch(e.target.value)}
-            placeholder="Buscar por código o nombre"
-            className="input-clinical"
-          />
-          <button
-            type="button"
-            onClick={handleSearchProcedures}
-            disabled={loadingProcedures}
-            className="btn-health-primary"
-          >
-            {loadingProcedures ? 'Buscando...' : 'Buscar'}
-          </button>
-        </div>
-
-        <div className="mt-4 space-y-3">
-          {procedureResults.length === 0 ? (
-            <p className="text-sm text-slate-500">Busque prestaciones para agregarlas.</p>
-          ) : (
-            procedureResults.map((procedure) => (
-              <div
-                key={procedure.id}
-                className="flex items-center justify-between rounded-xl border border-slate-200 p-4"
-              >
-                <div>
-                  <p className="text-sm font-semibold text-slate-900">{procedure.name}</p>
-                  <p className="text-xs text-slate-500">
-                    {procedure.code}
-                    {procedure.category ? ` · ${procedure.category}` : ''}
-                  </p>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => handleAddProcedure(procedure)}
-                  disabled={addingProcedureId === procedure.id}
-                  className="btn-health-secondary"
-                >
-                  {addingProcedureId === procedure.id ? 'Evaluando...' : 'Agregar'}
-                </button>
-              </div>
-            ))
-          )}
+        <div className="grid gap-4 xl:grid-cols-2">
+          {catalogFinders.map((finder) => (
+            <CatalogItemFinder
+              key={finder.section}
+              config={finder}
+              onSearch={() => handleSearchCatalogItems(finder)}
+              onAdd={handleAddProcedure}
+            />
+          ))}
         </div>
       </SectionCard>
 
@@ -3154,6 +3679,13 @@ function BudgetStep({
           handleRemoveItem={handleRemoveItem}
           total={sectionTotals.BED}
         />
+        <BudgetGroup
+          title="Honorarios médicos"
+          items={medicalFeeItems}
+          handleQuantityChange={handleQuantityChange}
+          handleRemoveItem={handleRemoveItem}
+          total={sectionTotals.MEDICAL_FEE}
+        />
       </SectionCard>
 
       <div className="grid gap-4 md:grid-cols-3">
@@ -3198,6 +3730,10 @@ function BudgetStep({
               <span className="text-slate-500">Día cama</span>
               <span className="font-medium text-slate-900">{formatCurrency(sectionTotals.BED)}</span>
             </div>
+            <div className="flex justify-between">
+              <span className="text-slate-500">Honorarios médicos</span>
+              <span className="font-medium text-slate-900">{formatCurrency(sectionTotals.MEDICAL_FEE)}</span>
+            </div>
             <div className="flex justify-between border-t border-slate-200 pt-2">
               <span className="text-slate-500">Subtotal</span>
               <span className="font-medium text-slate-900">{formatCurrency(subtotal)}</span>
@@ -3212,6 +3748,76 @@ function BudgetStep({
             </div>
           </div>
         </SectionCard>
+      </div>
+    </div>
+  );
+}
+
+function CatalogItemFinder({
+  config,
+  onSearch,
+  onAdd,
+}: {
+  config: CatalogFinderConfig;
+  onSearch: () => void;
+  onAdd: (procedure: Procedure) => void;
+}) {
+  return (
+    <div className="rounded-3xl border border-[var(--brand-secondary-soft)] bg-white p-4 shadow-sm">
+      <div className="mb-3">
+        <h4 className="text-base font-bold text-[var(--brand-primary)]">{config.title}</h4>
+        <p className="mt-1 text-xs text-slate-500">
+          Busca sólo ítems de tipo {config.itemType}.
+        </p>
+      </div>
+
+      <div className="flex flex-col gap-2 sm:flex-row">
+        <input
+          type="text"
+          value={config.search}
+          onChange={(event) => config.setSearch(event.target.value)}
+          placeholder={config.placeholder}
+          className="input-clinical"
+        />
+        <button
+          type="button"
+          onClick={onSearch}
+          disabled={config.loading}
+          className="btn-health-primary whitespace-nowrap"
+        >
+          {config.loading ? 'Buscando...' : 'Buscar'}
+        </button>
+      </div>
+
+      <div className="mt-3 space-y-2">
+        {config.results.length === 0 ? (
+          <p className="text-sm text-slate-500">{config.placeholder}.</p>
+        ) : (
+          config.results.map((item) => (
+            <div
+              key={`${config.section}-${item.id}`}
+              className="flex flex-col gap-3 rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
+            >
+              <div>
+                <div className="text-sm font-bold text-slate-800">
+                  {item.code} - {item.name}
+                </div>
+                <div className="mt-1 text-xs text-slate-500">
+                  {item.itemType ?? config.itemType} ·{' '}
+                  {item.careType === 'BOTH' ? 'Ambos' : item.careType}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => onAdd(item)}
+                disabled={config.addingId === item.id}
+                className="btn-health-secondary whitespace-nowrap"
+              >
+                {config.addingId === item.id ? 'Agregando...' : 'Agregar'}
+              </button>
+            </div>
+          ))
+        )}
       </div>
     </div>
   );
@@ -3373,7 +3979,7 @@ function PadSelectionModal({
             disabled={loading}
             className="btn-health-primary"
           >
-            {loading ? 'Procesando...' : 'Parto (50%)'}
+            {loading ? 'Procesando...' : 'PAD Convencional (50%)'}
           </button>
 
           <button
@@ -3382,7 +3988,7 @@ function PadSelectionModal({
             disabled={loading}
             className="btn-health-secondary"
           >
-            {loading ? 'Procesando...' : 'Cesárea (25%)'}
+            {loading ? 'Procesando...' : 'Parto / Cesárea (25%)'}
           </button>
         </div>
 

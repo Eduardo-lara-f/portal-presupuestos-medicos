@@ -3,9 +3,11 @@
 import React, { FormEvent, useEffect, useMemo, useState } from 'react';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
+const ITEMS_PER_PAGE = 10;
 
 type CareType = 'AMBULATORY' | 'SURGICAL' | 'BOTH';
-type ProcedureCategory = 'SUPPLY' | 'DRUG' | 'BED';
+type CatalogItemType = 'PROCEDURE' | 'SUPPLY' | 'MEDICATION' | 'BED_DAY' | 'MEDICAL_FEE';
+type ProcedureCategory = 'SUPPLY' | 'DRUG' | 'BED' | 'PROCEDURE' | 'MEDICAL_FEE';
 
 type Division = {
   id: number;
@@ -21,6 +23,7 @@ type Procedure = {
   name: string;
   description?: string | null;
   category?: string | null;
+  itemType: CatalogItemType;
   careType: CareType;
   active: boolean;
   division?: {
@@ -45,6 +48,7 @@ type ProcedureFormState = {
 
 type ProcedureCategoryMaintainerProps = {
   category: ProcedureCategory;
+  itemType?: CatalogItemType;
   pageTitle: string;
   singularLabel: string;
   pluralLabel: string;
@@ -58,8 +62,15 @@ const INITIAL_FORM: ProcedureFormState = {
   careType: 'BOTH',
 };
 
+function getCareTypeLabel(careType: CareType) {
+  if (careType === 'AMBULATORY') return 'Ambulatorio';
+  if (careType === 'SURGICAL') return 'Quirúrgico';
+  return 'Ambos';
+}
+
 export default function ProcedureCategoryMaintainer({
   category,
+  itemType,
   pageTitle,
   singularLabel,
   pluralLabel,
@@ -76,6 +87,7 @@ export default function ProcedureCategoryMaintainer({
   const [search, setSearch] = useState('');
   const [careTypeFilter, setCareTypeFilter] = useState('');
   const [activeFilter, setActiveFilter] = useState('true');
+  const [currentPage, setCurrentPage] = useState(1);
 
   const [editingItemId, setEditingItemId] = useState<number | null>(null);
   const [form, setForm] = useState<ProcedureFormState>(INITIAL_FORM);
@@ -137,6 +149,10 @@ export default function ProcedureCategoryMaintainer({
     }));
   }, [selectedDivisionId, editingItemId]);
 
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [items.length, selectedDivisionId, search, careTypeFilter, activeFilter]);
+
   async function loadItems() {
     try {
       setLoadingItems(true);
@@ -148,6 +164,7 @@ export default function ProcedureCategoryMaintainer({
       }
 
       params.set('category', category);
+      params.set('itemType', itemType ?? 'PROCEDURE');
 
       if (search.trim()) {
         params.set('search', search.trim());
@@ -168,6 +185,7 @@ export default function ProcedureCategoryMaintainer({
 
       const data: Procedure[] = await response.json();
       setItems(data);
+      setCurrentPage(1);
     } catch (error) {
       console.error(error);
       setAlert({
@@ -222,6 +240,7 @@ export default function ProcedureCategoryMaintainer({
         description: form.description.trim() || undefined,
         careType: form.careType,
         category,
+        itemType: itemType ?? 'PROCEDURE',
       };
 
       const response = await fetch(
@@ -239,7 +258,9 @@ export default function ProcedureCategoryMaintainer({
 
       if (!response.ok) {
         const errorText = await response.text();
-        throw new Error(errorText || `No se pudo guardar ${singularLabel.toLowerCase()}.`);
+        throw new Error(
+          errorText || `No se pudo guardar ${singularLabel.toLowerCase()}.`,
+        );
       }
 
       setAlert({
@@ -301,36 +322,60 @@ export default function ProcedureCategoryMaintainer({
   }
 
   const formTitle = useMemo(() => {
-    return editingItemId ? `Editar ${singularLabel.toLowerCase()}` : `Crear ${singularLabel.toLowerCase()}`;
+    return editingItemId
+      ? `Editar ${singularLabel.toLowerCase()}`
+      : `Crear ${singularLabel.toLowerCase()}`;
   }, [editingItemId, singularLabel]);
 
+  const totalPages = Math.max(1, Math.ceil(items.length / ITEMS_PER_PAGE));
+
+  const paginatedItems = useMemo(() => {
+    const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
+    return items.slice(startIndex, startIndex + ITEMS_PER_PAGE);
+  }, [items, currentPage]);
+
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-xl font-semibold">{pageTitle}</h1>
+    <div className="mx-auto w-full max-w-[1400px] px-6 pb-10 pt-4 md:px-8 lg:px-10">
+      <div className="mb-8 text-center">
+        <p className="text-xs font-bold uppercase tracking-[0.35em] text-sky-500">
+          Mantenedores
+        </p>
+        <h1 className="mt-3 text-3xl font-black tracking-[-0.04em] text-[#0F4C81] md:text-4xl">
+          {pageTitle}
+        </h1>
+        <p className="mx-auto mt-3 max-w-2xl text-sm text-slate-500 md:text-base">
+          Administra la creación, edición y estado de {pluralLabel.toLowerCase()} por división.
+        </p>
       </div>
 
       {alert && (
         <div
           className={[
-            'rounded border px-3 py-2 text-sm',
+            'mb-6 rounded-[22px] border px-5 py-4 text-sm font-medium shadow-sm',
             alert.type === 'success'
-              ? 'border-emerald-300 text-emerald-700'
+              ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
               : alert.type === 'error'
-              ? 'border-rose-300 text-rose-700'
-              : 'border-slate-300 text-slate-700',
+                ? 'border-rose-200 bg-rose-50 text-rose-700'
+                : 'border-sky-200 bg-sky-50 text-sky-700',
           ].join(' ')}
         >
           {alert.message}
         </div>
       )}
 
-      <section className="rounded border border-slate-300 p-4">
-        <h2 className="mb-4 text-base font-medium">{formTitle}</h2>
+      <section className="mb-6 overflow-hidden rounded-[32px] border border-sky-100 bg-white shadow-[0_24px_60px_-38px_rgba(15,76,129,0.45)]">
+        <div className="bg-gradient-to-r from-[#0F4C81] to-[#1E88C8] px-6 py-5 text-white md:px-8">
+          <p className="text-xs font-semibold uppercase tracking-[0.24em] text-sky-100">
+            Formulario
+          </p>
+          <h2 className="mt-1 text-xl font-bold">{formTitle}</h2>
+        </div>
 
-        <form onSubmit={handleSubmit} className="grid gap-4 md:grid-cols-2">
+        <form onSubmit={handleSubmit} className="grid gap-5 p-6 md:grid-cols-2 md:p-8">
           <div>
-            <label className="mb-1 block text-sm">División</label>
+            <label className="mb-2 block text-[11px] font-bold uppercase tracking-[0.18em] text-[#0F4C81]">
+              División
+            </label>
             <select
               value={form.divisionId}
               onChange={(e) =>
@@ -340,7 +385,7 @@ export default function ProcedureCategoryMaintainer({
                 }))
               }
               disabled={loadingDivisions}
-              className="w-full rounded border border-slate-300 px-3 py-2"
+              className="w-full rounded-2xl border border-sky-100 bg-white px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:ring-4 focus:ring-sky-100 disabled:bg-slate-50"
             >
               <option value="">Seleccione división</option>
               {divisions.map((division) => (
@@ -352,7 +397,9 @@ export default function ProcedureCategoryMaintainer({
           </div>
 
           <div>
-            <label className="mb-1 block text-sm">Código</label>
+            <label className="mb-2 block text-[11px] font-bold uppercase tracking-[0.18em] text-[#0F4C81]">
+              Código
+            </label>
             <input
               type="text"
               value={form.code}
@@ -362,12 +409,14 @@ export default function ProcedureCategoryMaintainer({
                   code: e.target.value,
                 }))
               }
-              className="w-full rounded border border-slate-300 px-3 py-2"
+              className="w-full rounded-2xl border border-sky-100 bg-white px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:ring-4 focus:ring-sky-100"
             />
           </div>
 
           <div>
-            <label className="mb-1 block text-sm">Nombre</label>
+            <label className="mb-2 block text-[11px] font-bold uppercase tracking-[0.18em] text-[#0F4C81]">
+              Nombre
+            </label>
             <input
               type="text"
               value={form.name}
@@ -377,12 +426,14 @@ export default function ProcedureCategoryMaintainer({
                   name: e.target.value,
                 }))
               }
-              className="w-full rounded border border-slate-300 px-3 py-2"
+              className="w-full rounded-2xl border border-sky-100 bg-white px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:ring-4 focus:ring-sky-100"
             />
           </div>
 
           <div>
-            <label className="mb-1 block text-sm">Tipo de atención</label>
+            <label className="mb-2 block text-[11px] font-bold uppercase tracking-[0.18em] text-[#0F4C81]">
+              Tipo de atención
+            </label>
             <select
               value={form.careType}
               onChange={(e) =>
@@ -391,16 +442,18 @@ export default function ProcedureCategoryMaintainer({
                   careType: e.target.value as CareType,
                 }))
               }
-              className="w-full rounded border border-slate-300 px-3 py-2"
+              className="w-full rounded-2xl border border-sky-100 bg-white px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:ring-4 focus:ring-sky-100"
             >
-              <option value="BOTH">BOTH</option>
-              <option value="AMBULATORY">AMBULATORY</option>
-              <option value="SURGICAL">SURGICAL</option>
+              <option value="BOTH">Ambos</option>
+              <option value="AMBULATORY">Ambulatorio</option>
+              <option value="SURGICAL">Quirúrgico</option>
             </select>
           </div>
 
           <div className="md:col-span-2">
-            <label className="mb-1 block text-sm">Descripción</label>
+            <label className="mb-2 block text-[11px] font-bold uppercase tracking-[0.18em] text-[#0F4C81]">
+              Descripción
+            </label>
             <textarea
               value={form.description}
               onChange={(e) =>
@@ -410,27 +463,23 @@ export default function ProcedureCategoryMaintainer({
                 }))
               }
               rows={3}
-              className="w-full rounded border border-slate-300 px-3 py-2"
+              className="w-full rounded-2xl border border-sky-100 bg-white px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:ring-4 focus:ring-sky-100"
             />
           </div>
 
-          <div className="md:col-span-2 flex gap-2">
+          <div className="flex flex-wrap gap-3 md:col-span-2">
             <button
               type="submit"
               disabled={savingItem}
-              className="rounded border border-slate-900 bg-slate-900 px-4 py-2 text-sm text-white"
+              className="rounded-2xl bg-[#0F4C81] px-5 py-3 text-sm font-bold text-white shadow-[0_14px_30px_-18px_rgba(15,76,129,0.9)] transition hover:bg-[#0B3B66] disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {savingItem
-                ? 'Guardando...'
-                : editingItemId
-                ? 'Actualizar'
-                : 'Crear'}
+              {savingItem ? 'Guardando...' : editingItemId ? 'Actualizar' : 'Crear'}
             </button>
 
             <button
               type="button"
               onClick={resetForm}
-              className="rounded border border-slate-300 px-4 py-2 text-sm"
+              className="rounded-2xl border border-slate-300 px-5 py-3 text-sm font-bold text-slate-700 transition hover:bg-slate-50"
             >
               Limpiar
             </button>
@@ -438,136 +487,220 @@ export default function ProcedureCategoryMaintainer({
         </form>
       </section>
 
-      <section className="rounded border border-slate-300 p-4">
-        <h2 className="mb-4 text-base font-medium">Listado</h2>
-
-        <div className="mb-4 grid gap-3 md:grid-cols-4">
-          <div>
-            <label className="mb-1 block text-sm">División</label>
-            <select
-              value={selectedDivisionId}
-              onChange={(e) => setSelectedDivisionId(e.target.value)}
-              className="w-full rounded border border-slate-300 px-3 py-2"
-            >
-              <option value="">Seleccione división</option>
-              {divisions.map((division) => (
-                <option key={division.id} value={division.id}>
-                  {division.name}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label className="mb-1 block text-sm">Buscar</label>
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="w-full rounded border border-slate-300 px-3 py-2"
-              placeholder="Código o nombre"
-            />
-          </div>
-
-          <div>
-            <label className="mb-1 block text-sm">Tipo</label>
-            <select
-              value={careTypeFilter}
-              onChange={(e) => setCareTypeFilter(e.target.value)}
-              className="w-full rounded border border-slate-300 px-3 py-2"
-            >
-              <option value="">Todos</option>
-              <option value="BOTH">BOTH</option>
-              <option value="AMBULATORY">AMBULATORY</option>
-              <option value="SURGICAL">SURGICAL</option>
-            </select>
-          </div>
-
-          <div>
-            <label className="mb-1 block text-sm">Estado</label>
-            <select
-              value={activeFilter}
-              onChange={(e) => setActiveFilter(e.target.value)}
-              className="w-full rounded border border-slate-300 px-3 py-2"
-            >
-              <option value="">Todos</option>
-              <option value="true">Activos</option>
-              <option value="false">Inactivos</option>
-            </select>
-          </div>
+      <section className="overflow-hidden rounded-[32px] border border-sky-100 bg-white shadow-[0_24px_60px_-38px_rgba(15,76,129,0.45)]">
+        <div className="bg-gradient-to-r from-[#0F4C81] to-[#1E88C8] px-6 py-5 text-white md:px-8">
+          <p className="text-xs font-semibold uppercase tracking-[0.24em] text-sky-100">
+            Listado
+          </p>
+          <h2 className="mt-1 text-xl font-bold">{pluralLabel}</h2>
         </div>
 
-        <div className="mb-4">
-          <button
-            type="button"
-            onClick={loadItems}
-            className="rounded border border-slate-900 px-4 py-2 text-sm"
-          >
-            Buscar
-          </button>
-        </div>
+        <div className="p-6 md:p-8">
+          <div className="mb-5 grid gap-4 md:grid-cols-4">
+            <div>
+              <label className="mb-2 block text-[11px] font-bold uppercase tracking-[0.18em] text-[#0F4C81]">
+                División
+              </label>
+              <select
+                value={selectedDivisionId}
+                onChange={(e) => {
+                  setSelectedDivisionId(e.target.value);
+                  setCurrentPage(1);
+                }}
+                className="w-full rounded-2xl border border-sky-100 bg-white px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:ring-4 focus:ring-sky-100"
+              >
+                <option value="">Seleccione división</option>
+                {divisions.map((division) => (
+                  <option key={division.id} value={division.id}>
+                    {division.name}
+                  </option>
+                ))}
+              </select>
+            </div>
 
-        {loadingItems ? (
-          <div>Cargando {pluralLabel.toLowerCase()}...</div>
-        ) : items.length === 0 ? (
-          <div>No hay {pluralLabel.toLowerCase()} para los filtros seleccionados.</div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="min-w-full border-collapse border border-slate-300 text-sm">
-              <thead>
-                <tr>
-                  <th className="border border-slate-300 px-3 py-2 text-left">ID</th>
-                  <th className="border border-slate-300 px-3 py-2 text-left">División</th>
-                  <th className="border border-slate-300 px-3 py-2 text-left">Código</th>
-                  <th className="border border-slate-300 px-3 py-2 text-left">Nombre</th>
-                  <th className="border border-slate-300 px-3 py-2 text-left">Tipo</th>
-                  <th className="border border-slate-300 px-3 py-2 text-left">Activo</th>
-                  <th className="border border-slate-300 px-3 py-2 text-left">Acciones</th>
-                </tr>
-              </thead>
-              <tbody>
-                {items.map((item) => (
-                  <tr key={item.id}>
-                    <td className="border border-slate-300 px-3 py-2">{item.id}</td>
-                    <td className="border border-slate-300 px-3 py-2">
-                      {item.division?.name ?? item.divisionId}
-                    </td>
-                    <td className="border border-slate-300 px-3 py-2">{item.code}</td>
-                    <td className="border border-slate-300 px-3 py-2">{item.name}</td>
-                    <td className="border border-slate-300 px-3 py-2">{item.careType}</td>
-                    <td className="border border-slate-300 px-3 py-2">
-                      {item.active ? 'Sí' : 'No'}
-                    </td>
-                    <td className="border border-slate-300 px-3 py-2">
-                      <div className="flex gap-2">
-                        <button
-                          type="button"
-                          onClick={() => handleEdit(item)}
-                          className="rounded border border-slate-300 px-3 py-1"
-                        >
-                          Editar
-                        </button>
+            <div>
+              <label className="mb-2 block text-[11px] font-bold uppercase tracking-[0.18em] text-[#0F4C81]">
+                Buscar
+              </label>
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => {
+                  setSearch(e.target.value);
+                  setCurrentPage(1);
+                }}
+                className="w-full rounded-2xl border border-sky-100 bg-white px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:ring-4 focus:ring-sky-100"
+                placeholder="Código o nombre"
+              />
+            </div>
 
-                        <button
-                          type="button"
-                          onClick={() => handleToggleStatus(item)}
-                          disabled={updatingStatusId === item.id}
-                          className="rounded border border-slate-300 px-3 py-1"
+            <div>
+              <label className="mb-2 block text-[11px] font-bold uppercase tracking-[0.18em] text-[#0F4C81]">
+                Tipo
+              </label>
+              <select
+                value={careTypeFilter}
+                onChange={(e) => {
+                  setCareTypeFilter(e.target.value);
+                  setCurrentPage(1);
+                }}
+                className="w-full rounded-2xl border border-sky-100 bg-white px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:ring-4 focus:ring-sky-100"
+              >
+                <option value="">Todos</option>
+                <option value="BOTH">Ambos</option>
+                <option value="AMBULATORY">Ambulatorio</option>
+                <option value="SURGICAL">Quirúrgico</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="mb-2 block text-[11px] font-bold uppercase tracking-[0.18em] text-[#0F4C81]">
+                Estado
+              </label>
+              <select
+                value={activeFilter}
+                onChange={(e) => {
+                  setActiveFilter(e.target.value);
+                  setCurrentPage(1);
+                }}
+                className="w-full rounded-2xl border border-sky-100 bg-white px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-sky-300 focus:ring-4 focus:ring-sky-100"
+              >
+                <option value="">Todos</option>
+                <option value="true">Activos</option>
+                <option value="false">Inactivos</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="mb-6 flex flex-wrap gap-3">
+            <button
+              type="button"
+              onClick={loadItems}
+              className="rounded-2xl border border-[#0F4C81] px-5 py-3 text-sm font-bold text-[#0F4C81] transition hover:bg-sky-50"
+            >
+              Buscar
+            </button>
+          </div>
+
+          {loadingItems ? (
+            <div className="rounded-2xl border border-sky-100 bg-sky-50 px-4 py-6 text-sm text-slate-600">
+              Cargando {pluralLabel.toLowerCase()}...
+            </div>
+          ) : items.length === 0 ? (
+            <div className="rounded-2xl border border-sky-100 bg-sky-50 px-4 py-6 text-sm text-slate-600">
+              No hay {pluralLabel.toLowerCase()} para los filtros seleccionados.
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {paginatedItems.map((item) => (
+                <div
+                  key={item.id}
+                  className="rounded-[24px] border border-sky-100 bg-gradient-to-br from-white to-sky-50/60 p-5 shadow-[0_15px_30px_-25px_rgba(15,76,129,0.35)]"
+                >
+                  <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-600">
+                          {item.division?.name ?? `División ${item.divisionId}`}
+                        </div>
+                        <span
+                          className={[
+                            'inline-flex rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em]',
+                            item.active
+                              ? 'bg-emerald-100 text-emerald-700'
+                              : 'bg-slate-200 text-slate-700',
+                          ].join(' ')}
                         >
-                          {updatingStatusId === item.id
-                            ? 'Actualizando...'
-                            : item.active
+                          {item.active ? 'Activo' : 'Inactivo'}
+                        </span>
+                      </div>
+
+                      <div className="mt-2 text-xl font-bold text-[#0F4C81]">
+                        {item.name}
+                      </div>
+
+                      <div className="mt-1 text-sm text-slate-600">
+                        Código: <span className="font-mono text-xs">{item.code}</span>
+                      </div>
+
+                      {item.description && (
+                        <div className="mt-2 max-w-3xl text-sm text-slate-500">
+                          {item.description}
+                        </div>
+                      )}
+
+                      <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-600">
+                        <span className="rounded-full border border-sky-100 bg-white px-3 py-1">
+                          ID: {item.id}
+                        </span>
+                        <span className="rounded-full border border-sky-100 bg-white px-3 py-1">
+                          Tipo atención: {getCareTypeLabel(item.careType)}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleEdit(item)}
+                        className="rounded-2xl border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+                      >
+                        Editar
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleToggleStatus(item)}
+                        disabled={updatingStatusId === item.id}
+                        className="rounded-2xl border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
+                      >
+                        {updatingStatusId === item.id
+                          ? 'Actualizando...'
+                          : item.active
                             ? 'Desactivar'
                             : 'Activar'}
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+
+              {items.length > ITEMS_PER_PAGE && (
+                <div className="flex flex-col gap-3 rounded-2xl border border-sky-100 bg-sky-50 px-4 py-4 text-sm text-slate-600 md:flex-row md:items-center md:justify-between">
+                  <span>
+                    Mostrando {(currentPage - 1) * ITEMS_PER_PAGE + 1}-
+                    {Math.min(currentPage * ITEMS_PER_PAGE, items.length)} de {items.length}{' '}
+                    {pluralLabel.toLowerCase()}
+                  </span>
+
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+                      disabled={currentPage === 1}
+                      className="rounded-2xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Anterior
+                    </button>
+
+                    <span className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-[#0F4C81]">
+                      Página {currentPage} de {totalPages}
+                    </span>
+
+                    <button
+                      type="button"
+                      onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
+                      disabled={currentPage === totalPages}
+                      className="rounded-2xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Siguiente
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </section>
     </div>
   );
