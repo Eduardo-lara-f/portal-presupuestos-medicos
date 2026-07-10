@@ -28,7 +28,7 @@ type LoginResponse = {
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('123456');
+  const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
   const [error, setError] = useState('');
@@ -212,7 +212,7 @@ export default function LoginPage() {
                 </p>
               </div>
 
-              <form onSubmit={handleSubmit} className="space-y-5">
+              <form onSubmit={handleSubmit} className="space-y-5" autoComplete="off">
                 <div>
                   <label className="mb-2 block text-sm font-semibold text-slate-700">Correo</label>
                   <input
@@ -221,7 +221,7 @@ export default function LoginPage() {
                     onChange={(e) => setEmail(e.target.value)}
                     className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none transition focus:border-[#2C8ED6] focus:bg-white focus:ring-4 focus:ring-blue-100"
                     placeholder="usuario@clinica.cl"
-                    autoComplete="email"
+                    autoComplete="off"
                   />
                 </div>
 
@@ -233,7 +233,7 @@ export default function LoginPage() {
                     onChange={(e) => setPassword(e.target.value)}
                     className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none transition focus:border-[#2C8ED6] focus:bg-white focus:ring-4 focus:ring-blue-100"
                     placeholder="******"
-                    autoComplete="current-password"
+                    autoComplete="new-password"
                   />
                 </div>
 
