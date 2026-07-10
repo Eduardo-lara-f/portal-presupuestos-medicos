@@ -530,6 +530,14 @@ export class QuotesService {
       select: {
         id: true,
         pdfS3Key: true,
+        total: true,
+        validityDays: true,
+        careType: true,
+        division: {
+          select: {
+            name: true,
+          },
+        },
         patient: {
           select: {
             firstName: true,
@@ -565,7 +573,31 @@ export class QuotesService {
 
     const signedUrl = await this.storageService.getSignedUrl(quote.pdfS3Key);
     const patientName = `${quote.patient.firstName} ${quote.patient.lastName}`.trim();
-    const caption = `Hola ${patientName || 'paciente'}, te enviamos tu presupuesto médico.`;
+    const divisionName = quote.division?.name || 'nuestra institución';
+    const careTypeLabel = quote.careType === CareType.SURGICAL ? 'Quirúrgico' : 'Ambulatorio';
+    const formattedTotal = new Intl.NumberFormat('es-CL', {
+      style: 'currency',
+      currency: 'CLP',
+      maximumFractionDigits: 0,
+    }).format(Number(quote.total ?? 0));
+
+    const caption = [
+      `Hola ${patientName || 'paciente'},`,
+      '',
+      `Te enviamos adjunto tu presupuesto médico #${quote.id}, emitido por ${divisionName}.`,
+      '',
+      `Resumen:`,
+      `• Tipo: ${careTypeLabel}`,
+      `• Total estimado: ${formattedTotal}`,
+      `• Vigencia: ${quote.validityDays ?? 15} días`,
+      '',
+      'El documento contiene el detalle de prestaciones, insumos y valores considerados para tu atención.',
+      '',
+      'Ante cualquier duda, puedes responder este mensaje o contactar directamente a la clínica.',
+      '',
+      `Saludos,`,
+      `Equipo ${divisionName}`,
+    ].join('\n');
 
     const response = await fetch(
       `https://graph.facebook.com/v20.0/${phoneNumberId}/messages`,
